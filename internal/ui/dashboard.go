@@ -177,6 +177,7 @@ const (
 	viewStateReviveAgentPick    // short pick-list when a worktree has 2+ agent candidates
 	viewStateMemoryCandidates   // review memory notes proposed from handovers
 	viewStateAgentUpdates       // "Agents on <host>": versions and updates of agent CLIs
+	viewStateOverview           // the newest overview of one host's sessions
 	viewStateGatewayPair        // pairing QR for the phone gateway on a remote
 )
 
@@ -358,6 +359,8 @@ type Model struct {
 	agentAPICursor  int                      // selected remote on the Agent API settings page
 	agentAPIProbing map[string]bool          // host → probe SSH call in flight
 	agentUpdates    *agentUpdatesView        // "Agents on <host>" page state
+	overview        *overviewView            // Overview page state
+	overviewNeeds   map[string]int           // host → needs-you count of its newest overview
 	gatewayPair     *gatewayPairView         // phone pairing page state
 	currentTab      mainTab
 	menu            list.Model
@@ -898,6 +901,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "sessions / agent API")),
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 			key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "usage and cost")),
+			key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "overview of the host's sessions")),
 		}
 	}
 
@@ -3182,8 +3186,8 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleAgentAPIUpdate(msg)
 		return model, cmd, true
 
-	case viewStateAgentUpdates:
-		model, cmd := m.handleAgentUpdatesUpdate(msg)
+	case viewStateAgentUpdates, viewStateOverview:
+		model, cmd := m.handleHostPageUpdate(msg)
 		return model, cmd, true
 
 	case viewStateSnapshotBrowser:
@@ -3621,8 +3625,8 @@ func (m *Model) renderView() string {
 	case viewStateAgentAPI:
 		return m.renderAgentAPIView()
 
-	case viewStateAgentUpdates:
-		return m.renderAgentUpdatesView()
+	case viewStateAgentUpdates, viewStateOverview:
+		return m.renderHostPage()
 
 	case viewStateSnapshotBrowser:
 		return docStyle.Render(m.snapshotBrowser.viewString())
@@ -5028,6 +5032,9 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	}
 	if msg.String() == "$" && m.currentTab == tabSessions {
 		return m, m.enterUsageView(), true
+	}
+	if msg.String() == "O" && m.currentTab == tabSessions {
+		return m, m.enterOverview(), true
 	}
 	if msg.String() == "q" || msg.String() == "esc" {
 		m.state = viewStateQuitConfirm

@@ -234,11 +234,16 @@ func (m *Model) gaugeHost() string {
 // headerGauge is "mem 18G/24G" for the user slice of the gauge host, or ""
 // when that slice has no finite soft limit or the host reports nothing.
 func (m *Model) headerGauge() string {
-	report, ok := m.res.byHost[m.gaugeHost()]
-	if !ok {
-		return ""
+	var parts []string
+	if report, ok := m.res.byHost[m.gaugeHost()]; ok {
+		if g := renderHeaderGaugeFor(report); g != "" {
+			parts = append(parts, g)
+		}
 	}
-	return renderHeaderGaugeFor(report)
+	if o := m.overviewHeaderPart(); o != "" {
+		parts = append(parts, o)
+	}
+	return strings.Join(parts, a1Text(" ", a1Dim, false, false))
 }
 
 // renderHeaderGaugeFor is the gauge for a host's report: the slice's memory,

@@ -195,6 +195,9 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		m.dropGoneHelperRow(msg.event.ID)
 		return follow(nil)
 	}
+	if msg.event.Type == "overview" {
+		return follow(m.overviewEventFetch(msg.host))
+	}
 	if msg.event.Type == "session_forgotten" {
 		m.dropForgottenRow(msg.event.ID)
 		return follow(nil)
