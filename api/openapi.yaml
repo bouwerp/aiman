@@ -962,6 +962,12 @@ components:
             uncommitted changes or unpushed commits (git worktree remove
             --force). The branch is never deleted. Send it only after showing
             the worktree_dirty data and confirming.
+        keep_children:
+          type: boolean
+          description: >
+            session.terminate: leave the session's visible descendants running
+            with no parent, listed in children_left. By default every
+            descendant is terminated with it.
         agent:
           type: string
           description: >
@@ -1375,11 +1381,10 @@ components:
           description: Why the worktree stayed, when it did.
         children_left:
           type: array
-          deprecated: true
           description: >
-            Never sent by this serve: every visible descendant is terminated
-            with its parent (children_terminated). An older serve listed the
-            children it left running here.
+            With keep_children, the running child sessions left with no
+            parent. Without it every visible descendant is terminated
+            (children_terminated) and this is absent.
           items:
             type: string
         children_terminated:

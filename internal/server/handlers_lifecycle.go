@@ -274,6 +274,8 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	}
 	var p struct {
 		Discard bool `json:"discard"`
+		// KeepChildren leaves visible descendants running with no parent.
+		KeepChildren bool `json:"keep_children"`
 	}
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -301,8 +303,12 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	if sess.IsLegacyTmux() {
 		return legacyTerminalResp(req.ID, sess)
 	}
-	kids, unlockKids := s.lockDescendants(ctx, sess, list)
-	defer unlockKids()
+	var kids []domain.Session
+	if !p.KeepChildren {
+		var unlockKids func()
+		kids, unlockKids = s.lockDescendants(ctx, sess, list)
+		defer unlockKids()
+	}
 	for _, kid := range kids {
 		if kid.IsLegacyTmux() {
 			return legacyTerminalResp(req.ID, kid)
@@ -348,6 +354,11 @@ func (s *Server) handleSessionTerminate(ctx context.Context, req Request) Respon
 	}
 	if len(ended) > 0 {
 		result["children_terminated"] = ended
+	}
+	if p.KeepChildren {
+		if left := runningChildren(sess, list); len(left) > 0 {
+			result["children_left"] = left
+		}
 	}
 	return Response{ID: req.ID, Result: result}
 }
@@ -468,6 +479,18 @@ func worktreeDirtyResp(id string, sess domain.Session, info worktree.Info, loss 
 	return Response{ID: id, Error: &Error{Code: CodeWorktreeDirty, Message: msg, Data: WorktreeDirtyData{
 		Session: sess.ID, ChangedFiles: loss.ChangedFiles, Paths: paths, UnpushedCommits: loss.UnpushedCommits,
 	}}}
+}
+
+// runningChildren names sess's visible children whose agent still runs: what
+// keep_children leaves with no parent.
+func runningChildren(sess domain.Session, list []domain.Session) []string {
+	var left []string
+	for _, c := range list {
+		if c.ParentID == sess.ID && !c.Role.Hidden() && !c.AgentEnded {
+			left = append(left, c.ID)
+		}
+	}
+	return left
 }
 
 // terminatedResult is the session_terminated answer. worktree_note says why a

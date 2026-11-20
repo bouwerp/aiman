@@ -487,11 +487,15 @@ type Model struct {
 	// immediately while making clear it is not yet confirmed against the remote.
 	discoveryPending       bool
 	terminatePrecheckError string
-	consoleOpen            bool
-	consoleLog             []string
-	consoleViewport        viewport.Model
-	gitStatus              domain.GitStatus
-	lastGitStatusUpdate    time.Time
+	// terminateKeepChildren is the confirm dialog's opt-out from tearing down
+	// the session's descendants. Reset each time the dialog opens, so the
+	// default is always that children go with their parent.
+	terminateKeepChildren bool
+	consoleOpen           bool
+	consoleLog            []string
+	consoleViewport       viewport.Model
+	gitStatus             domain.GitStatus
+	lastGitStatusUpdate   time.Time
 	// metaExtras is per-session cost, token, cache, and review state.
 	// usage.get fills the cost fields.
 	metaExtras        map[string]detailMetaExtras
@@ -4015,19 +4019,7 @@ func (m *Model) renderTerminateConfirm() string {
 		}
 		b.WriteString("  - Remove git worktree\n")
 		b.WriteString("  - Clean up local files\n\n")
-		kids := m.terminationChildren(s)
-		if len(kids) > 0 {
-			b.WriteString(failStyle.Render("Also terminates "+pluralSessions(len(kids))+":") + "\n")
-			const shown = 8
-			for i, kid := range kids {
-				if i == shown {
-					b.WriteString(fmt.Sprintf("  … and %d more\n", len(kids)-shown))
-					break
-				}
-				b.WriteString("  - " + sessionDisplayName(kid) + "\n")
-			}
-			b.WriteString("\n")
-		}
+		b.WriteString(m.terminateChildrenLines(s))
 		b.WriteString(activeStyle.Render("[y]") + " Confirm  " + activeStyle.Render("[f]") + " Force (discard changes)  " + activeStyle.Render("[n]") + " Cancel")
 
 		dialog := lipgloss.NewStyle().
@@ -5528,6 +5520,7 @@ func (m *Model) handleSessionManageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	if msg.String() == "ctrl+k" {
 		if sel := m.list.SelectedItem(); sel != nil {
 			m.terminatePrecheckError = ""
+			m.terminateKeepChildren = false
 			m.state = viewStateTerminateConfirm
 			return m, nil, true
 		}
@@ -6934,6 +6927,13 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.terminatePrecheckError = ""
 			m.state = viewStateMain
 			return m, nil
+		case "c":
+			if sel := m.list.SelectedItem(); sel != nil {
+				if len(m.terminationChildren(sel.(item).session)) > 0 {
+					m.terminateKeepChildren = !m.terminateKeepChildren
+				}
+			}
+			return m, nil
 		case "f":
 			if sel := m.list.SelectedItem(); sel != nil {
 				s := sel.(item).session
@@ -6947,7 +6947,7 @@ func (m *Model) handleTerminateConfirmUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.terminatePrecheckError = err.Error()
 					return m, nil
 				}
-				for _, kid := range m.terminationChildren(s) {
+				for _, kid := range m.terminationBatchChildren(s) {
 					if err := m.validateTerminationPreconditions(kid); err != nil {
 						m.terminatePrecheckError = "child " + sessionDisplayName(kid) + ": " + err.Error()
 						return m, nil

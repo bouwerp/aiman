@@ -640,6 +640,30 @@ func TestTerminateRemovesASharedTreeOnce(t *testing.T) {
 	}
 }
 
+// keep_children opts out: descendants keep running with no parent, a dirty
+// child tree does not refuse, and the running children are listed.
+func TestTerminateKeepChildrenLeavesThemRunning(t *testing.T) {
+	r := newLifecycleRig(t)
+	f := newGitFixture(t)
+	s := r.session(domain.Session{ID: "s1", WorkingDirectory: t.TempDir()})
+	r.session(domain.Session{ID: "kid", ParentID: "s1", WorktreePath: f.linked, WorkingDirectory: f.linked})
+	r.session(domain.Session{ID: "grandkid", ParentID: "kid", WorkingDirectory: t.TempDir()})
+	f.commitUnpushed(t)
+
+	got := lifecycleResult(t, r.call("session.terminate", map[string]any{"session": s.ID, "keep_children": true}))
+	if left, _ := got["children_left"].([]any); len(left) != 1 || left[0] != "kid" {
+		t.Fatalf("children_left %v", got["children_left"])
+	}
+	if got["children_terminated"] != nil {
+		t.Fatalf("children_terminated %v", got["children_terminated"])
+	}
+	kills := r.pty.Kills()
+	if r.rowExists("s1") || !r.rowExists("kid") || !r.rowExists("grandkid") ||
+		slices.Contains(kills, "kid") || slices.Contains(kills, "grandkid") || !pathExists(f.linked) {
+		t.Fatalf("children touched: kills %v", kills)
+	}
+}
+
 // A legacy tmux descendant refuses the cascade: aiman cannot stop it.
 func TestTerminateRefusesALegacyChild(t *testing.T) {
 	r := newLifecycleRig(t)

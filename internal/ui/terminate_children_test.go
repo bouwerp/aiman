@@ -117,6 +117,29 @@ func TestTerminationBatchAlwaysTakesTheChildren(t *testing.T) {
 	}
 }
 
+// The tick box is an opt-out: cleared, only the session goes and the dialog
+// says what staying means. The next batch is back to the default.
+func TestTerminationBatchKeepsChildrenWhenOptedOut(t *testing.T) {
+	m := childModel(
+		domain.Session{ID: "root", Name: "root"},
+		domain.Session{ID: "kid", Name: "kid", ParentID: "root"},
+	)
+	m.terminateKeepChildren = true
+	if !strings.Contains(m.terminateChildrenLines(domain.Session{ID: "root"}), "keep running with no parent") {
+		t.Error("the dialog does not say the children stay")
+	}
+	m.startTerminationBatch(domain.Session{ID: "root", Name: "root"}, false)
+	if _, ok := m.terminatingSessions["kid"]; ok {
+		t.Error("an opted-out child is terminating")
+	}
+	if _, ok := m.terminatingSessions["root"]; !ok {
+		t.Error("root is not terminating")
+	}
+	if m.terminateKeepChildren {
+		t.Error("the opt-out outlived its batch")
+	}
+}
+
 func TestPluralSessions(t *testing.T) {
 	if got := pluralSessions(1); got != "1 child session" {
 		t.Errorf("got %q", got)
