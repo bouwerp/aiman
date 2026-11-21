@@ -119,6 +119,36 @@ A session has one live run at a time. Do not use `--force`; it is for the operat
 
 The tester debugs browser code in their own DevTools, which need source maps. When `aiman harness status --json` shows `browser_sourcemaps.state` `absent`, make the build write them (Vite: `build.sourcemap: true`, not `'hidden'`) and keep any plugin that deletes maps out of `app.build`.
 
+## Sharing a run
+
+`aiman harness share` gives the operator a link to a console for your ready run, so a tester on the tailnet can open it without ssh. This section is part of both the aiman and aiman-harness skills.
+
+Preconditions:
+
+- The session's run is `ready` (`aiman harness status`).
+- `aiman-gateway` runs on this host, with `gateway.console_logins` set in the operator's config and Funnel off. The gateway tells serve where its console is every minute; serve counts an announce older than 3 minutes as no gateway.
+
+```bash
+aiman harness share      # prints <scheme>://aiman-gateway-<host>:8090/s/<id>, then the run id
+aiman harness unshare    # ends this session's links; prints how many it revoked
+```
+
+- The link is for the operator. Paste it as printed and say which run it opens. Do not shorten it, open it or send it anywhere else: anyone on the tailnet whose login is listed in `gateway.console_logins` and who holds the link can open it.
+- A new `share` ends every earlier link of the session. Run `share` again for a fresh link.
+- A share ends with the run (`down`, `idle`, a failed or stopped run), at `aiman harness unshare`, or after `harness.share_ttl` (default 12h).
+- The tester can run checks, read logs, capture, the database, EVM and AWS views and the debugger, and record verdicts. They cannot start or stop the run: you do that. A link works for browsers the tester has already opened it in; if the gateway restarts, the tester opens the link again.
+- A verdict the tester records reaches you as `[aiman] tester <login> marked harness scenario ...` and a to-do, like the operator's. Fix it, commit, and tell the operator the scenario is ready to run again.
+
+Refusals:
+
+| Code | Meaning | Do |
+|---|---|---|
+| `harness_not_running` | The session has no `ready` run | `aiman harness up --wait`, then share |
+| `unavailable`, message `gateway is not running` | No announce in the last 3 minutes | Tell the operator to start `aiman-gateway` with `gateway.console_logins` set |
+| `unavailable`, harness off | The harness is disabled on this host | Tell the operator |
+
+The operator's own console (`aiman harness console`) still works without a share.
+
 ## AWS services
 
 A service with `aws` runs a local AWS emulator (MiniStack) for S3, DynamoDB, SQS and SNS. Serve builds the resources from your CloudFormation, SAM or Terraform files before the app starts. Do not set `image`.
