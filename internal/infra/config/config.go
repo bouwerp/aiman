@@ -790,6 +790,9 @@ type GatewayConfig struct {
 	// means permitted; set false to refuse public Funnel even when the flag
 	// is passed. Funnel still has to be turned on with `--funnel`.
 	Funnel *bool `yaml:"funnel,omitempty"`
+	// ConsoleLogins is the Tailscale logins allowed to open a harness share
+	// link through the gateway's console. Empty turns the shared console off.
+	ConsoleLogins []string `yaml:"console_logins,omitempty"`
 }
 
 // GatewayFunnelPermitted reports whether the gateway may listen with Funnel.

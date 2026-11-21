@@ -129,6 +129,9 @@ const (
 	// EventHarnessVerdict records a tester's verdict: run, scenario, step,
 	// result, note, sha, dirty and diff_sha256.
 	EventHarnessVerdict EventKind = "harness.verdict"
+	// EventHarnessShared records a share link made for a ready run: session,
+	// run and share (the id). The URL is never recorded.
+	EventHarnessShared EventKind = "harness.shared"
 	// EventHarnessStopped records a run taken down: run and reason (down,
 	// idle, session_gone, serve_restart).
 	EventHarnessStopped EventKind = "harness.stopped"

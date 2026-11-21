@@ -187,7 +187,7 @@ func parseStatus(out string) []entry {
 }
 
 // isScaffold reports a file aiman or its graph tool generated in a worktree:
-// .aiman_* anywhere, the bundled skill in an agent's directory, and
+// .aiman_* anywhere, the bundled skills in an agent's directory, and
 // graphify-out. A real worktree holds these even when it has no work in it, so
 // they must not read as dirty.
 func isScaffold(rel string) bool {

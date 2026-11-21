@@ -253,6 +253,10 @@ func migrate(db *sql.DB) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create forgotten sessions table: %w", err)
 	}
 
+	if err := ensureHarnessShares(db); err != nil {
+		return nil, fmt.Errorf("failed to create harness share tables: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,

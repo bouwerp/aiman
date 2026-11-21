@@ -176,6 +176,7 @@ func TestScaffoldIsNotDirtyAndDoesNotBlockRemoval(t *testing.T) {
 		".aiman_task.md", ".aiman_handover.md", "sub/.aiman_todo.md",
 		".claude/skills/aiman/SKILL.md", ".agents/skills/aiman/SKILL.md",
 		".codex/skills/aiman/design-template.md", "graphify-out/cache/x.json",
+		".claude/skills/aiman-harness/SKILL.md", ".codex/skills/aiman-harness/harness.md",
 	} {
 		write(t, filepath.Join(linked, f), "generated")
 	}

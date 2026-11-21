@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/cgroup"
@@ -34,6 +35,9 @@ type HarnessConfig struct {
 	MaxRuns int `yaml:"max_runs,omitempty"`
 	// IdleTimeout takes down a run no RPC touched for this long (2h).
 	IdleTimeout time.Duration `yaml:"idle_timeout,omitempty"`
+	// ShareTTL caps how long a harness share link lives, as a Go duration
+	// ("12h", the default). "0" or an unreadable value keeps the default.
+	ShareTTL string `yaml:"share_ttl,omitempty"`
 	// Images configures image vetting.
 	Images HarnessImagesConfig `yaml:"images,omitempty"`
 	// DlvVersion and DlvModuleSum pin the Delve debug runs build on the
@@ -99,6 +103,17 @@ func (h HarnessConfig) MaxRunsOrDefault() int {
 		return h.MaxRuns
 	}
 	return DefaultHarnessMaxRuns
+}
+
+// DefaultHarnessShareTTL is how long a share link lives when share_ttl is unset.
+const DefaultHarnessShareTTL = 12 * time.Hour
+
+// ShareTTLOrDefault is ShareTTL as a duration, or DefaultHarnessShareTTL.
+func (h HarnessConfig) ShareTTLOrDefault() time.Duration {
+	if d, err := time.ParseDuration(strings.TrimSpace(h.ShareTTL)); err == nil && d > 0 {
+		return d
+	}
+	return DefaultHarnessShareTTL
 }
 
 // IdleTimeoutOrDefault is IdleTimeout, or DefaultHarnessIdleTimeout when unset.

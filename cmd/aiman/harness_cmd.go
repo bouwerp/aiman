@@ -117,6 +117,8 @@ const harnessUsageText = `Usage: aiman harness list [--dirty] [--json]   (--dirt
        aiman harness aws write ...|reset   (operator writes to a run's aws service)
        aiman harness result [<run>] [--run ID] [--json]
        aiman harness verdict <step|all> pass|fail|skip [--note TEXT] [--run ID] [--json]   (operator)
+       aiman harness share [--session NAME] [--json]
+       aiman harness unshare [--session NAME] [--json]
        aiman harness down [--run ID] [--json]
        aiman harness console [--remote NAME] [--session NAME] [--run ID] [--text] [--no-browser]   (laptop)
        aiman harness image status|approve|db-install ...   (see aiman harness image)
@@ -278,6 +280,8 @@ var harnessSubs = map[string]harnessSub{
 	"down":    {0, 0, true, harnessDown},
 	"debug":   {0, 1, true, harnessDebug},
 	"db":      {2, 3, true, harnessDB},
+	"share":   {0, 0, false, harnessShare},
+	"unshare": {0, 0, false, harnessUnshare},
 }
 
 // harnessMain runs a host subcommand against serve.

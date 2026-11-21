@@ -22,3 +22,12 @@ const HarnessName = "harness.md"
 //
 //go:embed harness.md
 var Harness string
+
+// HarnessSkillName is the harness skill's directory name and frontmatter name.
+const HarnessSkillName = "aiman-harness"
+
+// HarnessSkillText is the aiman-harness skill installed as SKILL.md beside a
+// copy of the harness reference.
+//
+//go:embed harness/SKILL.md
+var HarnessSkillText string

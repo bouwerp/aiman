@@ -631,7 +631,7 @@
   function renderEmpty(run) {
     const p = $("dbg-empty");
     p.textContent = emptyText(run);
-    if (run && run.state === "failed" && run.error_code === "harness_debug_unsupported" && nodeChecks(run).length && C.upChecksOnly) {
+    if (!d.shared && run && run.state === "failed" && run.error_code === "harness_debug_unsupported" && nodeChecks(run).length && C.upChecksOnly) {
       const b = el("button", { type: "button", class: "btn", text: "Start for check debugging" });
       b.addEventListener("click", () => C.upChecksOnly(run.scenario));
       p.append(" ", b);
@@ -642,6 +642,8 @@
     // update follows the console's poll: a new run resets the tab.
     update(state) {
       const run = state.run;
+      d.shared = !!state.shared;
+      $("dbg-shared").hidden = !d.shared;
       // The target is a running debug check, else the app.
       const dc = run && run.debug_check;
       const launch = run && (dc ? dc.launch : run.debug_launch);

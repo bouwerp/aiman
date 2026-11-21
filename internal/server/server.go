@@ -515,6 +515,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		"harness.evm_txs", "harness.evm_trace", "harness.capture", "harness.db",
 		"harness.aws", "harness.aws_plan", "harness.aws_calls", "harness.aws_write":
 		return s.dispatchHarness(ctx, req)
+	case "gateway.announce", "harness.share", "harness.unshare", "harness.share_get":
+		return s.dispatchHarnessShare(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
 	case "review.reveal", "review.post", "review.refresh", "review.run", "review.debug", "review.coverage",
