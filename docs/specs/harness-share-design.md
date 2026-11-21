@@ -1,6 +1,6 @@
 # harness-share: a harness skill and a console URL over the tailnet
 
-**Revision:** 3 · **Size:** project · **Status:** in review
+**Revision:** 4 (as built) · **Size:** project · **Status:** built
 **Task:** operator request in session `app-debug-harness` (2026-11-20) · **Spec:** `docs/specs/harness-share.md` (written with the build)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -224,6 +224,22 @@ None. Both answered 2026-11-20 (see Decisions).
 | [medium] DAP needs a Forwarder with no listener | medium | accept | `console.HostForwarder` maps ports to `127.0.0.1:<host_port>` |
 | [low] share id length | low | accept | 32 bytes base64url |
 | [low] tailnet IP Host refused | low | accept | Tailnet IPs added to `Hosts` |
+
+## Deviations from the approved design
+
+Rev 3 was approved on 2026-11-20. Built in five pieces (P1-P5) and landed on `app-debug-harness`. Where the code differs, in the order found:
+
+- `cmd/aiman/serve.go` logs skill counts that cover both skills, so the `aiman skill:` line changed.
+- `gateway.announce` is accepted even when the harness is disabled; only `harness.share`, `unshare` and `share_get` need it.
+- `ListLiveHarnessShares` is a sqlite method the design did not list. Serve uses it to publish `ended` for each revoked share; the gateway learns of shares from `/s/<id>`, events and its poll instead.
+- A shared console waits up to 5s for its first poll before serving (`consoleFor`), because the console has no ready hook.
+- The gateway knows a share only after someone opened `/s/<id>` since it started. A gateway restart forgets shares and visit tokens, so the visitor opens the link again; an app link opened before the share link finds no visit token.
+- App links work only after the share link was opened in that browser, because forwards need the visit token of the same login.
+- Forwards skip 8080, 8090 and the console port only; no other host port is excluded.
+- The system tailscaled host-node check uses the default socket path; a tailscaled on another socket is not seen, so its node is not refused.
+- An empty `gateway.console_logins` turns the console off; the gateway never falls back to `allow_logins`.
+- The tester's method set leaves out `harness.down` as well as `harness.up` (the design listed `down` in the set and then excluded it); the agent owns the run's lifecycle.
+- Wave 1 (as built earlier): the announce goes stale after 3 minutes, so the gateway announces every minute; a shared console's app links use `Hosts[0]`; `Methods` gates `harness.status` too.
 
 ## Breakdown
 

@@ -60,5 +60,6 @@ Design: `.aiman_design.md` rev 3. Surprises, in the order found:
 - App links work only after the share link was opened in that browser, because forwards need the visit token of the same login.
 - Forwards skip 8080, 8090 and the console port only; no other host port is excluded.
 - The system tailscaled host-node check uses the default socket path; a tailscaled on another socket is not seen, so its node is not refused.
-- `config.GatewayConfig.ConsoleLogins` is commented as "Empty means AllowLogins", but the gateway does not fall back: an empty list turns the console off. The docs follow the code.
+- An empty `gateway.console_logins` turns the console off; the gateway never falls back to `allow_logins`.
+- The tester's method set leaves out `harness.down` as well as `harness.up` (the design listed `down` in the set and then excluded it); the agent owns the run's lifecycle.
 - Wave 1 (as built earlier): the announce goes stale after 3 minutes, so the gateway announces every minute; a shared console's app links use `Hosts[0]`; `Methods` gates `harness.status` too.
