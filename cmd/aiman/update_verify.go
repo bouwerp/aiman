@@ -47,7 +47,7 @@ func verifyChecksum(data []byte, checksums, name string) error {
 // the release's checksums.txt, and returns the extracted binary's path. A
 // release without checksums.txt is refused, so nothing published before the
 // file existed can be installed.
-func downloadRelease(release *githubRelease, assetName string) (string, error) {
+func downloadRelease(ctx context.Context, release *githubRelease, assetName string) (string, error) {
 	archiveURL, err := release.assetURL(assetName)
 	if err != nil {
 		return "", err
@@ -62,11 +62,11 @@ func downloadRelease(release *githubRelease, assetName string) (string, error) {
 	if checksumsURL == "" {
 		return "", noChecksums
 	}
-	checksums, err := fetchAsset(checksumsURL, maxChecksumsSize)
+	checksums, err := fetchAsset(ctx, checksumsURL, maxChecksumsSize)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", noChecksums, err)
 	}
-	archive, err := fetchAsset(archiveURL, maxArchiveSize)
+	archive, err := fetchAsset(ctx, archiveURL, maxArchiveSize)
 	if err != nil {
 		return "", err
 	}
@@ -79,8 +79,8 @@ func downloadRelease(release *githubRelease, assetName string) (string, error) {
 
 // fetchAsset reads a release asset into memory, because the bytes must be
 // verified before anything acts on them.
-func fetchAsset(url string, limit int64) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), assetDownloadTimeout)
+func fetchAsset(ctx context.Context, url string, limit int64) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, assetDownloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

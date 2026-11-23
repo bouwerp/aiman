@@ -443,3 +443,22 @@ func (p *cmdStreamProcess) Wait() int {
 	})
 	return p.code
 }
+
+// Close kills every stream process, so none outlives an exec of the TUI.
+func (s *RPCStreams) Close() {
+	s.mu.Lock()
+	var cur []*rpcStream
+	for _, rs := range s.remotes {
+		if rs.cur != nil {
+			cur = append(cur, rs.cur)
+			rs.cur = nil
+		}
+	}
+	s.mu.Unlock()
+	for _, st := range cur {
+		st.kill()
+	}
+}
+
+// CloseRPCStreams kills the package's stream processes.
+func CloseRPCStreams() { defaultRPCStreams.Close() }

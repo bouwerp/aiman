@@ -45,7 +45,7 @@ func releaseHint(self string, remotes []string, github string) (ReleaseHint, boo
 
 // Line is the help line's version slot while a newer release exists.
 func (h ReleaseHint) Line(self string) string {
-	return self + " · " + h.Tag + " available: aiman update"
+	return self + " · " + h.Tag + " available: U to update"
 }
 
 // githubReleaseMsg carries the latest GitHub release tag; empty on any error.
@@ -98,7 +98,7 @@ func (m *Model) refreshReleaseHint() tea.Cmd {
 		return nil
 	}
 	m.hintToasted[hint.Tag] = true
-	return m.showToast(hint.Tag+" available: aiman update", false, 8*time.Second)
+	return m.showToast(hint.Tag+" available: U to update", false, 8*time.Second)
 }
 
 // versionSlot is what the help line shows at its right edge.
