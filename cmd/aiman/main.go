@@ -248,22 +248,48 @@ func run() error {
 	// 7. Start TUI with StartupModel (Splash screen)
 	intelligence := ai.NewIntelligenceProvider(cfg)
 	snapshotManager := usecase.NewSnapshotManager(db, intelligence)
+	ui.SetSelfUpdater(tuiUpdater{})
 	startup := ui.NewStartupModel(cfg, doctor, db, flowManager, intelligence, snapshotManager, version)
 	p := tea.NewProgram(startup)
 
 	// From here the TUI owns the terminal, so anything written to stderr lands
 	// in the middle of the rendered frame. Background work logs to a file until
 	// the program exits.
-	if closeLog := redirectLogToFile(); closeLog != nil {
+	closeLog := redirectLogToFile()
+	if closeLog != nil {
 		defer closeLog()
 	}
 
 	// Inject the program reference into the model via message once the event loop starts.
 	go func() { p.Send(ui.SetProgramMsg{Program: p}) }()
-	if _, err := p.Run(); err != nil {
+	final, err := p.Run()
+	if err != nil {
 		return fmt.Errorf("alas, there's been an error: %w", err)
 	}
+	if r, ok := final.(ui.Restarter); ok && r.RestartRequested() {
+		return restartInto(origArgs, closeLog, db)
+	}
 
+	return nil
+}
+
+// restartInto replaces this process with the binary the TUI just installed.
+// Defers do not run across exec, so the stream processes, the store and the
+// log file are closed first.
+func restartInto(origArgs []string, closeLog func(), db io.Closer) error {
+	resolved, err := resolveSelf()
+	if err != nil {
+		return err
+	}
+	usecase.CloseRPCStreams()
+	_ = db.Close()
+	if closeLog != nil {
+		closeLog()
+	}
+	if err := execSelf(resolved, restartArgv(resolved, origArgs), restartEnv(os.Environ(), version)); err != nil {
+		fmt.Fprintf(os.Stderr, "aiman: restart failed: %v\n", err)
+		fmt.Printf("Updated. Start aiman again.\n")
+	}
 	return nil
 }
 

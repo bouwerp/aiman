@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -87,7 +88,7 @@ func TestDownloadReleaseVerifiesChecksum(t *testing.T) {
 	bad := tarGz(t, asset, []byte("tampered binary"))
 	sums := fmt.Sprintf("%s  %s.tar.gz\n", sha256Hex(good), asset)
 
-	path, err := downloadRelease(fakeRelease(t, asset, good, sums), asset)
+	path, err := downloadRelease(context.Background(), fakeRelease(t, asset, good, sums), asset)
 	if err != nil {
 		t.Fatalf("good archive refused: %v", err)
 	}
@@ -97,11 +98,11 @@ func TestDownloadReleaseVerifiesChecksum(t *testing.T) {
 		t.Fatalf("extracted %q", got)
 	}
 
-	if path, err := downloadRelease(fakeRelease(t, asset, bad, sums), asset); err == nil {
+	if path, err := downloadRelease(context.Background(), fakeRelease(t, asset, bad, sums), asset); err == nil {
 		_ = os.Remove(path)
 		t.Fatal("tampered archive installed: checksum not verified")
 	}
-	if path, err := downloadRelease(fakeRelease(t, asset, good, ""), asset); err == nil {
+	if path, err := downloadRelease(context.Background(), fakeRelease(t, asset, good, ""), asset); err == nil {
 		_ = os.Remove(path)
 		t.Fatal("release without checksums.txt installed")
 	}

@@ -275,13 +275,14 @@ func (m StartupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		mainModel := NewModel(m.cfg, m.results, dbSessions, m.db, m.flowManager, m.intelligence, m.snapshotManager, startupLogs...)
 		mainModel.version = m.version
+		toast := mainModel.takeUpdatedToast()
 		mainModel.Program = m.Program
 		mainModel.discoveryPending = !m.discoveryDone
 		if m.width > 0 && m.height > 0 {
 			mainModel.SetSize(m.width, m.height)
 		}
 
-		cmds := []tea.Cmd{mainModel.Init()}
+		cmds := []tea.Cmd{mainModel.Init(), toast}
 		if m.discoveryDone {
 			// Discovery beat the checks. Replay it into the dashboard rather than
 			// merging here, so there is a single merge implementation

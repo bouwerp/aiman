@@ -42,7 +42,7 @@ type githubAsset struct {
 func runUpdate(currentVersion string) error {
 	fmt.Println("Checking for updates...")
 
-	release, err := fetchLatestRelease()
+	release, err := fetchLatestRelease(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %w", err)
 	}
@@ -77,13 +77,13 @@ func runDowngrade(currentVersion string, args []string) error {
 	var release *githubRelease
 	if tag != "" {
 		fmt.Printf("Fetching release %s...\n", tag)
-		release, err = fetchReleaseByTag(tag)
+		release, err = fetchReleaseByTag(context.Background(), tag)
 		if err != nil {
 			return fmt.Errorf("failed to fetch release %s: %w", tag, err)
 		}
 	} else {
 		fmt.Println("Looking up the previous stable release...")
-		rels, listErr := fetchReleases()
+		rels, listErr := fetchReleases(context.Background())
 		if listErr != nil {
 			return fmt.Errorf("failed to list releases: %w", listErr)
 		}
@@ -141,7 +141,7 @@ func installRelease(release *githubRelease) error {
 	assetName := platformAssetName()
 
 	fmt.Printf("Downloading %s...\n", assetName)
-	newBinary, err := downloadRelease(release, assetName)
+	newBinary, err := downloadRelease(context.Background(), release, assetName)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
@@ -209,25 +209,25 @@ func previousRelease(rels []githubRelease, current string) (*githubRelease, erro
 	return &stables[1], nil
 }
 
-func fetchLatestRelease() (*githubRelease, error) {
+func fetchLatestRelease(ctx context.Context) (*githubRelease, error) {
 	var release githubRelease
-	if err := githubGet(githubRepoAPI+"/releases/latest", &release); err != nil {
+	if err := githubGet(ctx, githubRepoAPI+"/releases/latest", &release); err != nil {
 		return nil, err
 	}
 	return &release, nil
 }
 
-func fetchReleaseByTag(tag string) (*githubRelease, error) {
+func fetchReleaseByTag(ctx context.Context, tag string) (*githubRelease, error) {
 	tag = normalizeReleaseTag(tag)
 	var release githubRelease
 	path := githubRepoAPI + "/releases/tags/" + url.PathEscape(tag)
-	if err := githubGet(path, &release); err != nil {
+	if err := githubGet(ctx, path, &release); err != nil {
 		return nil, err
 	}
 	return &release, nil
 }
 
-func fetchReleases() ([]githubRelease, error) {
+func fetchReleases(ctx context.Context) ([]githubRelease, error) {
 	u, err := url.Parse(githubRepoAPI + "/releases")
 	if err != nil {
 		return nil, err
@@ -237,14 +237,14 @@ func fetchReleases() ([]githubRelease, error) {
 	u.RawQuery = q.Encode()
 
 	var rels []githubRelease
-	if err := githubGet(u.String(), &rels); err != nil {
+	if err := githubGet(ctx, u.String(), &rels); err != nil {
 		return nil, err
 	}
 	return rels, nil
 }
 
-func githubGet(rawURL string, dest any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func githubGet(ctx context.Context, rawURL string, dest any) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

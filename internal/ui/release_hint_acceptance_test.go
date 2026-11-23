@@ -41,7 +41,7 @@ func TestReleaseHint(t *testing.T) {
 
 func TestReleaseHintLine(t *testing.T) {
 	h := ReleaseHint{Tag: "v0.35.0", Source: "remote"}
-	if got, want := h.Line("v0.34.0"), "v0.34.0 · v0.35.0 available: aiman update"; got != want {
+	if got, want := h.Line("v0.34.0"), "v0.34.0 · v0.35.0 available: U to update"; got != want {
 		t.Fatalf("Line = %q, want %q", got, want)
 	}
 }

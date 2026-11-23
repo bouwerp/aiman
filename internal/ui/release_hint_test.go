@@ -23,7 +23,7 @@ func TestRefreshReleaseHintToastsOncePerTag(t *testing.T) {
 	if cmd := m.refreshReleaseHint(); cmd == nil {
 		t.Fatal("a new tag raised no toast")
 	}
-	if got, want := m.versionSlot(), "v0.34.0 · v0.35.0 available: aiman update"; got != want {
+	if got, want := m.versionSlot(), "v0.34.0 · v0.35.0 available: U to update"; got != want {
 		t.Fatalf("versionSlot = %q, want %q", got, want)
 	}
 	if cmd := m.refreshReleaseHint(); cmd != nil {
@@ -68,7 +68,7 @@ func TestHintLineShowsReleaseHint(t *testing.T) {
 	m := hintModel("v0.34.0")
 	m.githubLatest = "v0.35.0"
 	m.refreshReleaseHint()
-	if got := m.hintLine(120); !strings.Contains(got, "v0.35.0 available: aiman update") {
+	if got := m.hintLine(120); !strings.Contains(got, "v0.35.0 available: U to update") {
 		t.Fatalf("hint line %q lacks the release hint", got)
 	}
 }
