@@ -62,8 +62,8 @@ func TestOverviewPageShowsTheNewestReportAndSetsTheHeaderCount(t *testing.T) {
 		}
 	}
 	host := m.overview.remote.Host
-	if m.overviewNeeds[host] != 2 {
-		t.Fatalf("needs %v", m.overviewNeeds)
+	if b := ansi.Strip(m.overviewBannerFor(host)); !strings.Contains(b, "2 need you") {
+		t.Fatalf("banner %q", b)
 	}
 }
 
@@ -79,15 +79,12 @@ func TestOverviewPageWithNoRunOffersOne(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("r started nothing")
 	}
-	_, poll := m.routeRemoteServiceMsg(cmd())
+	m.routeRemoteServiceMsg(cmd())
 	if (*calls)[len(*calls)-1] != "overview.run" || m.overview.run == nil || m.overview.run.State != server.OverviewRunning {
 		t.Fatalf("calls %v run %+v", *calls, m.overview.run)
 	}
-	if poll == nil || !m.overview.pollQueued {
-		t.Fatal("a running run is not polled")
-	}
-	if out := ansi.Strip(m.renderOverviewView()); !strings.Contains(out, "Running for") {
-		t.Fatalf("page:\n%s", out)
+	if b := ansi.Strip(m.overviewBannerFor(m.overview.remote.Host)); !strings.Contains(b, "overview ▸") {
+		t.Fatalf("banner %q after a start", b)
 	}
 	// A second r while it runs starts nothing.
 	if _, again := m.handleOverviewUpdate(pressRune('r')); again != nil {
@@ -96,16 +93,17 @@ func TestOverviewPageWithNoRunOffersOne(t *testing.T) {
 }
 
 func TestOverviewEventRereadsTheHost(t *testing.T) {
-	m, calls := overviewPage(t, map[string]any{"overview.get": doneOverview})
+	m, _ := overviewPage(t, map[string]any{"overview.get": doneOverview})
 	host := m.overview.remote.Host
 	m.state = viewStateMain
+	calls := fakeOverviewRPC(t, map[string]any{"overview.get": `{"type":"overview_run","latest":{"id":"r1","agent":"codex","state":"done","started_at":"2026-11-20T07:00:00Z","ended_at":"2026-11-20T07:01:00Z","needs_you":2,"sessions":3}}`})
 	cmd := m.overviewEventFetch(host)
 	if cmd == nil {
 		t.Fatal("no fetch for a known host")
 	}
 	m.routeRemoteServiceMsg(cmd())
-	if len(*calls) != 2 || m.overviewNeeds[host] != 2 {
-		t.Fatalf("calls %v needs %v", *calls, m.overviewNeeds)
+	if len(*calls) != 1 || !strings.Contains(ansi.Strip(m.overviewBannerFor(host)), "2 need you") {
+		t.Fatalf("calls %v banner %q", *calls, m.overviewBannerFor(host))
 	}
 	if m.overviewEventFetch("unknown-host") != nil {
 		t.Fatal("fetched for a host with no remote")
