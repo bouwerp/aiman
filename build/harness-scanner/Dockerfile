@@ -41,7 +41,7 @@ RUN set -eu; \
     test -s rules.yar
 
 FROM ${BASE}
-ARG CLAMAV_VERSION=1.4.3+dfsg-1
+ARG CLAMAV_VERSION=1.4.6+dfsg-1~deb13u1
 ARG YARA_VERSION=4.5.2-1
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends ca-certificates \
