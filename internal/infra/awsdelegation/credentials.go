@@ -176,6 +176,7 @@ func getAssumeRoleCreds(ctx context.Context, roleARN, sessionName, profile, sess
 	if sp := strings.TrimSpace(sessionPolicy); sp != "" {
 		args = append(args, "--policy", sp)
 	}
+	args = append(args, regionalSTSArgs(roleARN)...)
 	if durationSeconds > 0 {
 		args = append(args, "--duration-seconds", fmt.Sprintf("%d", durationSeconds))
 	}
@@ -240,4 +241,19 @@ func FormatCredentialsSection(profileName string, creds *SessionCredentials) str
 		fmt.Fprintf(&b, "%s = %s\n", ExpiryKey, creds.Expiration.UTC().Format(time.RFC3339))
 	}
 	return b.String()
+}
+
+// regionalSTSRegion is the STS endpoint region for roles in the aws partition.
+const regionalSTSRegion = "us-east-1"
+
+// regionalSTSArgs sends assume-role to a regional STS endpoint. The global
+// endpoint issues version 1 tokens unless the account opts in to version 2, and
+// opt-in regions (af-south-1, ap-east-1, ...) refuse version 1 tokens with
+// UnrecognizedClientException. Regional endpoints always issue version 2 tokens.
+// Roles in another partition keep the CLI's own endpoint choice.
+func regionalSTSArgs(roleARN string) []string {
+	if !strings.HasPrefix(strings.TrimSpace(roleARN), "arn:aws:") {
+		return nil
+	}
+	return []string{"--region", regionalSTSRegion, "--endpoint-url", "https://sts." + regionalSTSRegion + ".amazonaws.com"}
 }
