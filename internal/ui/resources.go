@@ -231,22 +231,77 @@ func (m *Model) gaugeHost() string {
 			return host
 		}
 	}
-	return ""
+	// The overview banner does not need a resources answer: with one agent
+	// API host, the header speaks for it.
+	var only string
+	for _, r := range agentAPIRemotes(m.cfg) {
+		if only != "" && r.Host != only {
+			return ""
+		}
+		only = r.Host
+	}
+	return only
 }
 
-// headerGauge is "mem 18G/24G" for the user slice of the gauge host, or ""
-// when that slice has no finite soft limit or the host reports nothing.
+// headerGaugeParts is the memory gauge ("mem 18G/24G" for the user slice of
+// the gauge host, "" when that slice has no finite soft limit or the host
+// reports nothing) and the overview banner of the gauge host.
+func (m *Model) headerGaugeParts() (mem, overview string) {
+	host := m.gaugeHost()
+	if report, ok := m.res.byHost[host]; ok {
+		mem = renderHeaderGaugeFor(report)
+	}
+	if host == "" {
+		host = m.onlyOverviewHost()
+	}
+	return mem, m.overviewBannerFor(host)
+}
+
+// onlyOverviewHost is the one host with an overview run, else "".
+func (m *Model) onlyOverviewHost() string {
+	var only string
+	for host, st := range m.overviewStatus {
+		if st == nil || st.latest == nil {
+			continue
+		}
+		if only != "" {
+			return ""
+		}
+		only = host
+	}
+	return only
+}
+
+// headerGauge is the memory gauge and the overview banner together.
 func (m *Model) headerGauge() string {
-	var parts []string
-	if report, ok := m.res.byHost[m.gaugeHost()]; ok {
-		if g := renderHeaderGaugeFor(report); g != "" {
-			parts = append(parts, g)
+	mem, overview := m.headerGaugeParts()
+	return joinGauge(mem, overview)
+}
+
+func joinGauge(parts ...string) string {
+	var kept []string
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
 		}
 	}
-	if o := m.overviewBannerFor(m.gaugeHost()); o != "" {
-		parts = append(parts, o)
+	return strings.Join(kept, a1Text(" ", a1Dim, false, false))
+}
+
+// renderHeader is the header with as much of the gauge as fits: both parts,
+// else the overview banner alone, else the memory gauge alone, else none.
+func (m *Model) renderHeader(host string, sessions, needsYou int, scanning bool, width int) string {
+	mem, overview := m.headerGaugeParts()
+	plain := renderA1Header(host, sessions, needsYou, scanning, width)
+	for _, g := range []string{joinGauge(mem, overview), overview, mem} {
+		if g == "" {
+			continue
+		}
+		if h := renderA1HeaderGauge(host, g, sessions, needsYou, scanning, width); h != plain {
+			return h
+		}
 	}
-	return strings.Join(parts, a1Text(" ", a1Dim, false, false))
+	return plain
 }
 
 // renderHeaderGaugeFor is the gauge for a host's report: the slice's memory,

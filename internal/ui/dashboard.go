@@ -7489,7 +7489,7 @@ func (m *Model) renderMainView() string {
 		headerW = 1
 	}
 	sessions, needs := m.headerSessionCounts()
-	header := renderA1HeaderGauge(m.a1HostLabel(), m.headerGauge(), sessions, needs, m.discoveryPending, headerW)
+	header := m.renderHeader(m.a1HostLabel(), sessions, needs, m.discoveryPending, headerW)
 
 	contentWidth := m.width - 4 // docStyle margins
 	if contentWidth < 1 {
