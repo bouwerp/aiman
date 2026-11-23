@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/bouwerp/aiman/internal/infra/remotesvc"
 	"github.com/bouwerp/aiman/internal/ui"
 )
 
@@ -111,6 +112,9 @@ func (tuiUpdater) Stage(ctx context.Context, tag string, progress func(string)) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to find release: %w", err)
 	}
+	if tag == "" && !newerThanRunning(release.TagName) {
+		return nil, fmt.Errorf("aiman %s is up to date", version)
+	}
 	asset := platformAssetName()
 	progress("download " + asset + ".tar.gz")
 	tmp, err := downloadRelease(ctx, release, asset)
@@ -119,4 +123,15 @@ func (tuiUpdater) Stage(ctx context.Context, tag string, progress func(string)) 
 	}
 	progress("verify " + checksumsAsset)
 	return &stagedBinary{target: target, tmp: tmp}, nil
+}
+
+// newerThanRunning reports whether tag is a release newer than this binary.
+// A build whose version is not a release (dev) takes any release.
+func newerThanRunning(tag string) bool {
+	cur, ok := remotesvc.ParseVersion(version)
+	if !ok {
+		return true
+	}
+	t, ok := remotesvc.ParseVersion(tag)
+	return ok && cur.Less(t)
 }
