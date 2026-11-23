@@ -114,6 +114,8 @@ func (m *Model) drainPending() tea.Cmd {
 				ids = []string{k.id}
 			}
 			cmd = m.sweepTodosCmd(k.host, ids)
+		case "overview.get":
+			cmd = m.overviewEventFetch(k.host)
 		default:
 			s, ok := m.sessionByID(k.id)
 			if !ok {
