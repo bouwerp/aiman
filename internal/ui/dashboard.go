@@ -3089,7 +3089,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySessionCreateMsg(msg, cmds)
 	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
 		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg, resourcesMsg, resourcesTickMsg,
-		sessionIdentitySyncMsg:
+		sessionIdentitySyncMsg, overviewMsg, overviewStartedMsg, overviewStatusMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
@@ -7489,7 +7489,7 @@ func (m *Model) renderMainView() string {
 		headerW = 1
 	}
 	sessions, needs := m.headerSessionCounts()
-	header := renderA1HeaderGauge(m.a1HostLabel(), m.headerGauge(), sessions, needs, m.discoveryPending, headerW)
+	header := m.renderHeader(m.a1HostLabel(), sessions, needs, m.discoveryPending, headerW)
 
 	contentWidth := m.width - 4 // docStyle margins
 	if contentWidth < 1 {
