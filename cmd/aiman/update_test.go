@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -114,7 +115,7 @@ func TestFetchReleaseByTag(t *testing.T) {
 	defer srv.Close()
 	swapGitHubAPI(t, srv.URL)
 
-	got, err := fetchReleaseByTag("v0.9.1")
+	got, err := fetchReleaseByTag(context.Background(), "v0.9.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +132,7 @@ func TestFetchReleaseByTagNotFound(t *testing.T) {
 	defer srv.Close()
 	swapGitHubAPI(t, srv.URL)
 
-	_, err := fetchReleaseByTag("v9.9.9")
+	_, err := fetchReleaseByTag(context.Background(), "v9.9.9")
 	if !errors.Is(err, errReleaseNotFound) {
 		t.Fatalf("err = %v, want errReleaseNotFound", err)
 	}
@@ -148,7 +149,7 @@ func TestFetchReleases(t *testing.T) {
 	defer srv.Close()
 	swapGitHubAPI(t, srv.URL)
 
-	got, err := fetchReleases()
+	got, err := fetchReleases(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

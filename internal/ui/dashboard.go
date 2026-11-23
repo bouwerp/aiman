@@ -178,6 +178,7 @@ const (
 	viewStateMemoryCandidates   // review memory notes proposed from handovers
 	viewStateAgentUpdates       // "Agents on <host>": versions and updates of agent CLIs
 	viewStateOverview           // the newest overview of one host's sessions
+	viewStateSelfUpdate         // update this laptop's aiman and restart
 	viewStateGatewayPair        // pairing QR for the phone gateway on a remote
 )
 
@@ -578,6 +579,10 @@ type Model struct {
 	// res is each host's session resource usage (resources.go).
 	res         resourcesState
 	hintToasted map[string]bool
+	// selfUpdate is the update page; restartAfterQuit asks main to exec the
+	// new binary once the program has quit.
+	selfUpdate       *selfUpdatePage
+	restartAfterQuit bool
 	// syncReconciled marks sessions this run has already tried to build a local
 	// sync for, so a failure is not retried in a loop (see create_remote.go).
 	syncReconciled    map[string]bool
@@ -902,6 +907,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 			key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "usage and cost")),
 			key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "overview of the host's sessions")),
+			key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update aiman (when a release is shown)")),
 		}
 	}
 
@@ -937,6 +943,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 		menuItem{title: "AWS Credentials", desc: "View and renew shared AWS credentials", action: viewStateAWSCredentials},
 		menuItem{title: "Session Snapshots", desc: "Browse archived session snapshots", action: viewStateSnapshotBrowser},
 		menuItem{title: "Scheduled Prompts", desc: "Manage periodic cron-scheduled prompt injections", action: viewStateScheduledPrompts},
+		menuItem{title: "Update aiman", desc: "Install the newest release of this laptop's aiman and restart it", action: viewStateSelfUpdate},
 		menuItem{title: "Revive Worktree", desc: "Find abandoned worktrees under a remote's repo root and resume the agent that worked there", action: viewStateReviveRemotePicker},
 	}
 	m := list.New(menuItems, list.NewDefaultDelegate(), 0, 0)
@@ -3089,7 +3096,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applySessionCreateMsg(msg, cmds)
 	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
 		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg, resourcesMsg, resourcesTickMsg,
-		sessionIdentitySyncMsg, overviewMsg, overviewStartedMsg, overviewStatusMsg:
+		sessionIdentitySyncMsg, overviewMsg, overviewStartedMsg, overviewStatusMsg,
+		selfUpdateStageMsg, selfUpdateStepMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
 		// Startup and refresh both deliver this after the dashboard is already
@@ -3187,7 +3195,7 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleAgentAPIUpdate(msg)
 		return model, cmd, true
 
-	case viewStateAgentUpdates, viewStateOverview:
+	case viewStateAgentUpdates, viewStateOverview, viewStateSelfUpdate:
 		model, cmd := m.handleHostPageUpdate(msg)
 		return model, cmd, true
 
@@ -3626,7 +3634,7 @@ func (m *Model) renderView() string {
 	case viewStateAgentAPI:
 		return m.renderAgentAPIView()
 
-	case viewStateAgentUpdates, viewStateOverview:
+	case viewStateAgentUpdates, viewStateOverview, viewStateSelfUpdate:
 		return m.renderHostPage()
 
 	case viewStateSnapshotBrowser:
@@ -5034,6 +5042,10 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if msg.String() == "$" && m.currentTab == tabSessions {
 		return m, m.enterUsageView(), true
 	}
+	if msg.String() == "U" && m.currentTab == tabSessions && m.hint != nil {
+		m.enterSelfUpdate(m.hint.Tag)
+		return m, nil, true
+	}
 	if msg.String() == "O" && m.currentTab == tabSessions {
 		return m, m.enterOverview(), true
 	}
@@ -5642,6 +5654,14 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if i.action == viewStateAWSCredentials {
 					return m, m.enterAWSCredentials()
+				}
+				if i.action == viewStateSelfUpdate {
+					tag := ""
+					if m.hint != nil {
+						tag = m.hint.Tag
+					}
+					m.enterSelfUpdate(tag)
+					return m, nil
 				}
 				if i.action == viewStateAgentAPI {
 					return m, m.enterAgentAPI()

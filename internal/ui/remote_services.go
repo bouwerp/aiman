@@ -351,6 +351,11 @@ func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyDaemonProbe(msg)
 	case serviceOpMsg:
 		return m.applyServiceOp(msg)
+	case selfUpdateStageMsg:
+		return m.applySelfUpdateStage(msg)
+	case selfUpdateStepMsg:
+		m.applySelfUpdateStep(msg)
+		return m, nil
 	case rtkInstallMsg:
 		return m.applyRTKInstall(msg)
 	case agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg:
