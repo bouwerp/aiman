@@ -57,6 +57,8 @@ type SessionEvent struct {
 	Subagent string `json:"subagent,omitempty"`
 	// Text is a notify event's formatted text, which never holds terminal text.
 	Text string `json:"text,omitempty"`
+	// Step names the overview step that changed on overview.
+	Step string `json:"step,omitempty"`
 }
 
 // isSessionEvents reports whether a request opens the event stream, which like

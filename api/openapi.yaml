@@ -1283,7 +1283,18 @@ components:
           format: date-time
         error:
           type: string
-          description: Why a failed run failed.
+          description: 'Why a failed run failed: "<step label>: <step error>" when a step failed.'
+        needs_you:
+          type: integer
+          description: How many Needs you bullets the report has, set when the run is done.
+        steps:
+          type: array
+          description: >
+            The run's steps in order (collect, bundle, start_agent, report,
+            cleanup), all pending when the run is created. A failed step
+            fails the run and the later steps stay pending.
+          items:
+            $ref: "#/components/schemas/OverviewStep"
         sessions:
           type: integer
           description: Sessions the bundle held in full.
@@ -1316,14 +1327,49 @@ components:
               type: array
               items:
                 type: string
+    OverviewStep:
+      type: object
+      description: One phase of an overview run.
+      required: [name, label, state]
+      properties:
+        name:
+          type: string
+          enum: [collect, bundle, start_agent, report, cleanup]
+          description: Stable token.
+        label:
+          type: string
+          description: Text a client shows (collect sessions, write bundle, start agent, write report, clean up).
+        state:
+          type: string
+          enum: [pending, running, done, failed]
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        detail:
+          type: string
+          description: >
+            What the step did (12 sessions, 412 KiB, claude (fable), 4
+            sections, 3 need you), or reminded: <parse error> while the
+            report step waits for a valid report.
+        error:
+          type: string
+          description: Why a failed step failed.
     OverviewRunResult:
       type: object
       description: >
-        overview.run (the run just started) and overview.get (the named run,
-        else the running one, else the newest done run). overview.run needs
-        the operator, waits at the pressure gate, and answers overview_running
-        while a run is in progress; on the gateway it needs allow_destructive.
-      required: [type, run]
+        overview.run answers at once with the run just created (starting,
+        every step pending) and does the work in the background; the run's
+        steps and the overview hub event report progress. overview.get
+        answers the named run, else the running one, else the newest done
+        run, plus latest. overview.get {summary: true} answers latest only,
+        with no run, and no latest when there has never been a run.
+        overview.run needs the operator, waits at the pressure gate, and
+        answers overview_running while a run is in progress; on the gateway
+        it needs allow_destructive.
+      required: [type]
       properties:
         type:
           type: string
@@ -1333,6 +1379,13 @@ components:
         running:
           type: string
           description: The id of a run still in progress when overview.get answered an older one.
+        latest:
+          allOf:
+            - $ref: "#/components/schemas/OverviewRun"
+          description: >
+            overview.get only: the newest run of any state (a newer failure
+            is never hidden behind an older done run), without markdown and
+            report, with needs_you, steps, error and times.
     OverviewRunsResult:
       type: object
       description: overview.list, the kept runs newest first (at most 20 finished).
@@ -3890,8 +3943,9 @@ components:
             session_activity, session_gone and session_created come from the
             stream's own poll; todo_changed, steer, usage, usage.budget,
             notify and verify are published by request handlers;
-            overview is published when an overview run changes state, with
-            id the run and status its state; harness_share is published
+            overview is published when an overview run or one of its steps
+            changes, with id the run, status its state and step the step
+            that changed (a signal to read overview.get again); harness_share is published
             when a harness share becomes live or ends, with id the share
             and state live or ended;
             session_forgotten is published when serve drops a session's row
@@ -3955,6 +4009,9 @@ components:
         subagent:
           type: string
           description: On transcript, the sub-agent whose file moved; absent for the parent.
+        step:
+          type: string
+          description: On overview, the step that changed (collect, bundle, start_agent, report, cleanup); absent at create.
         queued:
           type: integer
           description: Steering notes still waiting on steer.

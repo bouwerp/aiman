@@ -27,10 +27,12 @@ func overviewServer(t *testing.T) (*Server, *fakeCreator, *ptyfake.FakePTY, stri
 	fake.Add(ptyruntime.SessionInfo{ID: "new-id", Status: ptyruntime.StatusRunning, Role: string(domain.SessionRoleOverview)})
 	srv.pty = fake
 	srv.overviewPoll = time.Hour
+	t.Cleanup(srv.CloseOverview)
 	return srv, creator, fake, filepath.Join(home, ".aiman", "overviews")
 }
 
-func runOverview(t *testing.T, srv *Server) OverviewRun {
+// startOverviewRun starts a run and waits until its agent runs.
+func startOverviewRun(t *testing.T, srv *Server) OverviewRun {
 	t.Helper()
 	resp := rpc(t, srv, "", "overview.run", map[string]any{})
 	if resp.Error != nil {
@@ -41,6 +43,23 @@ func runOverview(t *testing.T, srv *Server) OverviewRun {
 	if err := json.Unmarshal(b, &run); err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp := rpc(t, srv, "", "overview.get", map[string]any{"run": run.ID})
+		if resp.Error != nil {
+			t.Fatalf("overview.get: %+v", resp.Error)
+		}
+		b, _ := json.Marshal(resp.Result.(map[string]any)["run"])
+		var got OverviewRun
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.State != OverviewStarting {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("run %s never left starting", run.ID)
 	return run
 }
 
@@ -69,7 +88,7 @@ func overviewWatchOf(srv *Server, base string, run OverviewRun) *overviewWatch {
 func TestOverviewRunWritesTheBundleAndStartsAHiddenSession(t *testing.T) {
 	srv, creator, _, base := overviewServer(t)
 	srv.appendEvent(context.Background(), "p", domain.EventActorAiman, domain.EventChildLanded, map[string]any{"secret": "payload-text"})
-	run := runOverview(t, srv)
+	run := startOverviewRun(t, srv)
 	if run.State != OverviewRunning || run.Agent != "codex" || run.Model != "gpt-5.4" || run.Sessions != 1 {
 		t.Fatalf("run %+v", run)
 	}
@@ -96,7 +115,7 @@ func TestOverviewRunWritesTheBundleAndStartsAHiddenSession(t *testing.T) {
 
 func TestOverviewFinishesOnAValidReport(t *testing.T) {
 	srv, _, fake, base := overviewServer(t)
-	run := runOverview(t, srv)
+	run := startOverviewRun(t, srv)
 	w := overviewWatchOf(srv, base, run)
 	if srv.overviewStep(context.Background(), w, time.Now()) {
 		t.Fatal("ended with no report while the agent runs")
@@ -125,12 +144,12 @@ func TestOverviewFinishesOnAValidReport(t *testing.T) {
 		t.Fatal("the agent was not stopped")
 	}
 	// A new run may start once the last one ended.
-	_ = runOverview(t, srv)
+	_ = startOverviewRun(t, srv)
 }
 
 func TestOverviewRemindsOnceThenFailsWhenTheAgentEnds(t *testing.T) {
 	srv, _, fake, base := overviewServer(t)
-	run := runOverview(t, srv)
+	run := startOverviewRun(t, srv)
 	w := overviewWatchOf(srv, base, run)
 	if err := os.WriteFile(filepath.Join(base, run.ID, overview.ReportFile), []byte("## In progress\n- x: y\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -152,7 +171,7 @@ func TestOverviewRemindsOnceThenFailsWhenTheAgentEnds(t *testing.T) {
 
 func TestOverviewTimesOut(t *testing.T) {
 	srv, _, _, base := overviewServer(t)
-	run := runOverview(t, srv)
+	run := startOverviewRun(t, srv)
 	w := overviewWatchOf(srv, base, run)
 	if !srv.overviewStep(context.Background(), w, time.Now().Add(config.DefaultOverviewTimeout+time.Minute)) {
 		t.Fatal("did not time out")
@@ -173,14 +192,14 @@ func TestOverviewRefusals(t *testing.T) {
 
 func TestCleanStaleOverviewsFailsLeftoverRuns(t *testing.T) {
 	srv, _, _, base := overviewServer(t)
-	run := runOverview(t, srv)
+	run := startOverviewRun(t, srv)
 	// A new serve: nothing running in memory, the run still on disk.
 	srv.overviewMu.Lock()
 	srv.overview.running = nil
 	srv.overviewMu.Unlock()
 	srv.CleanStaleOverviews(context.Background())
 	got := getOverview(t, srv)
-	if got.ID != run.ID || got.State != OverviewFailed || got.Error != "serve restarted" || pathExists(filepath.Join(base, run.ID)) {
+	if got.ID != run.ID || got.State != OverviewFailed || !strings.HasSuffix(got.Error, ": serve restarted") || pathExists(filepath.Join(base, run.ID)) {
 		t.Fatalf("run %+v", got)
 	}
 }

@@ -54,11 +54,20 @@ type OverviewRun struct {
 	NamesOnly []string         `json:"names_only,omitempty"`
 	Markdown  string           `json:"markdown,omitempty"`
 	Report    *overview.Report `json:"report,omitempty"`
+	// NeedsYou counts the report's Needs you bullets, set when the run is done.
+	NeedsYou *int `json:"needs_you,omitempty"`
+	// Steps are the run's phases in order (overviewStepLabels).
+	Steps []OverviewStep `json:"steps,omitempty"`
+
+	// finishing is set once a finish has begun, so a run ends once.
+	finishing bool
 }
 
-// overviewState is serve's one running overview, if any.
+// overviewState is serve's one running overview, if any, and the background
+// context its goroutine runs on.
 type overviewState struct {
 	running *OverviewRun
+	bg      *overviewBG
 }
 
 // SetOverviewDir sets the directory overview runs live in. Empty is
@@ -118,7 +127,7 @@ func (s *Server) handleOverviewRun(ctx context.Context, req Request) Response {
 		s.overviewMu.Unlock()
 		return errResp(req.ID, CodeOverviewRunning, fmt.Sprintf("overview %s is still running", run.ID))
 	}
-	run := &OverviewRun{ID: uuid.NewString()[:8], State: OverviewStarting, StartedAt: time.Now().UTC()}
+	run := &OverviewRun{ID: uuid.NewString()[:8], State: OverviewStarting, StartedAt: time.Now().UTC(), Steps: newOverviewSteps()}
 	s.overview.running = run
 	s.overviewMu.Unlock()
 
@@ -127,20 +136,16 @@ func (s *Server) handleOverviewRun(ctx context.Context, req Request) Response {
 		s.clearOverview(run)
 		return errResp(req.ID, CodeInvalidParams, err.Error())
 	}
+	s.overviewMu.Lock()
 	run.Agent, run.Model = pick.Agent, pick.Model
-	sess, err := s.startOverview(ctx, base, run, pick)
-	if err != nil {
-		s.clearOverview(run)
-		return errResp(req.ID, CodeCreateFailed, err.Error())
-	}
-	run.Session, run.State = sess.ID, OverviewRunning
-	s.saveOverview(base, run)
-	s.appendEvent(ctx, domain.OverviewLedger, domain.EventActorUser, domain.EventOverviewStarted, map[string]any{
-		"run": run.ID, "session": sess.ID, "agent": run.Agent, "model": run.Model, "sessions": run.Sessions,
-	})
-	s.publishOverview(run)
-	go s.watchOverview(base, run, sess) //nolint:gosec // G118: the run outlives the request that started it
-	return Response{ID: req.ID, Result: map[string]any{"type": "overview_run", "run": run.public()}}
+	snap := run.clone()
+	s.overviewMu.Unlock()
+	// Saved before the goroutine starts, so the run is on disk even if serve
+	// dies before the first step.
+	s.saveOverview(base, &snap)
+	s.publishOverview(&snap, "")
+	s.goOverview(func(bg context.Context) { s.runOverview(bg, base, run, pick) })
+	return Response{ID: req.ID, Result: map[string]any{"type": "overview_run", "run": snap}}
 }
 
 // pickOverviewAgent is the named agent when it is installed, with the
@@ -176,32 +181,97 @@ func (s *Server) pickOverviewAgent(ctx context.Context, name, model string) (con
 	return config.PreferredAgent{}, errors.New("no agents.smart entry is installed on this host; name an agent")
 }
 
-// startOverview writes the bundle and brief into a fresh repository under
-// base and starts the hidden overview session there.
-func (s *Server) startOverview(ctx context.Context, base string, run *OverviewRun, pick config.PreferredAgent) (domain.Session, error) {
+// runOverview does a run's slow work on serve's background context:
+// collect, bundle, start the agent, then watch for the report. Each step is
+// saved and published as it changes; a failed step fails the run.
+func (s *Server) runOverview(ctx context.Context, base string, run *OverviewRun, pick config.PreferredAgent) {
+	defer s.overviewPanic(base, run)
+	dir := filepath.Join(base, run.ID)
+	fail := func(sess domain.Session, why string) {
+		s.finishOverview(ctx, base, run, sess, OverviewFailed, "", nil, why)
+	}
+
+	s.updateOverview(base, run, StepCollect, func(r *OverviewRun, now time.Time) { r.startStep(StepCollect, now) })
 	inputs, err := s.overviewInputs(ctx)
 	if err != nil {
-		return domain.Session{}, err
+		fail(domain.Session{}, err.Error())
+		return
 	}
 	nonce := overview.NewNonce()
 	bundle := overview.Build(inputs, nonce, nil)
-	run.Sessions, run.NamesOnly = len(bundle.Sessions), bundle.NamesOnly
-	dir := filepath.Join(base, run.ID)
+	detail := plural(len(bundle.Sessions), "session")
+	if n := len(bundle.NamesOnly); n > 0 {
+		detail += fmt.Sprintf(" (plus %d by name only)", n)
+	}
+	s.updateOverview(base, run, StepCollect, func(r *OverviewRun, now time.Time) {
+		r.Sessions, r.NamesOnly = len(bundle.Sessions), bundle.NamesOnly
+		r.endStep(StepCollect, detail, now)
+		r.startStep(StepBundle, now)
+	})
+
 	if err := prepareConsultDir(ctx, dir, overview.Brief(nonce, dir)); err != nil {
-		_ = os.RemoveAll(dir)
-		return domain.Session{}, err
+		fail(domain.Session{}, err.Error())
+		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, overview.BundleFile), []byte(bundle.Text), 0o600); err != nil {
-		_ = os.RemoveAll(dir)
-		return domain.Session{}, err
+		fail(domain.Session{}, err.Error())
+		return
 	}
+	s.updateOverview(base, run, StepBundle, func(r *OverviewRun, now time.Time) {
+		r.endStep(StepBundle, formatKiB(len(bundle.Text)), now)
+		r.startStep(StepStartAgent, now)
+	})
+
+	if ctx.Err() != nil {
+		fail(domain.Session{}, overviewClosing)
+		return
+	}
+	if !s.PressureOpen() {
+		fail(domain.Session{}, CodeHostUnderPressure+": host under memory pressure; run the overview again later")
+		return
+	}
+	sess, err := s.startOverviewAgent(ctx, dir, run.ID, pick)
+	if err != nil {
+		if ctx.Err() != nil {
+			fail(domain.Session{}, overviewClosing)
+			return
+		}
+		fail(domain.Session{}, err.Error())
+		return
+	}
+	// Recorded at once, so a serve that dies now can still retire it.
+	s.updateOverview(base, run, StepStartAgent, func(r *OverviewRun, _ time.Time) { r.Session = sess.ID })
+	if ctx.Err() != nil {
+		fail(sess, overviewClosing)
+		return
+	}
+	agentLabel := pick.Agent
+	if pick.Model != "" {
+		agentLabel += " (" + pick.Model + ")"
+	}
+	snap := s.updateOverview(base, run, StepStartAgent, func(r *OverviewRun, now time.Time) {
+		r.endStep(StepStartAgent, agentLabel, now)
+		r.State = OverviewRunning
+		r.startStep(StepReport, now)
+	})
+	s.appendEvent(ctx, domain.OverviewLedger, domain.EventActorUser, domain.EventOverviewStarted, map[string]any{
+		"run": run.ID, "session": sess.ID, "agent": snap.Agent, "model": snap.Model, "sessions": snap.Sessions,
+	})
+	s.watchOverview(ctx, base, run, sess)
+}
+
+// overviewClosing is the step error of a run serve's close cut short.
+const overviewClosing = "serve closing"
+
+// startOverviewAgent starts the hidden overview session in dir.
+func (s *Server) startOverviewAgent(ctx context.Context, dir, runID string, pick config.PreferredAgent) (domain.Session, error) {
 	runAgent := domain.Agent{Name: pick.Agent, Command: pick.Agent, LaunchModel: pick.Model, LaunchEffort: pick.Effort}
 	if known, ok := agent.FindKnown(pick.Agent); ok {
 		known.LaunchModel, known.LaunchEffort = pick.Model, pick.Effort
 		runAgent = known
 	}
-	sess, err := s.startConsult(ctx, domain.SessionConfig{
-		Name:             "overview-" + run.ID,
+	return s.startConsult(ctx, domain.SessionConfig{
+		Name:             "overview-" + runID,
 		Role:             domain.SessionRoleOverview,
 		Tier:             config.TierSmart,
 		Agent:            &runAgent,
@@ -211,11 +281,17 @@ func (s *Server) startOverview(ctx context.Context, base string, run *OverviewRu
 		InitialPrompt: "Read " + domain.AimanTaskFileName + " and follow it. Read " + overview.BundleFile +
 			" and write " + filepath.Join(dir, overview.ReportFile) + ", then stop.",
 	})
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return domain.Session{}, err
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
 	}
-	return sess, nil
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+func formatKiB(n int) string {
+	return fmt.Sprintf("%d KiB", (n+1023)/1024)
 }
 
 // overviewInputs collects every visible session whose agent has not ended.
@@ -262,10 +338,9 @@ func (s *Server) overviewTranscript(sess domain.Session) []transcript.Item {
 	return page.Items
 }
 
-// watchOverview waits for a valid report, an ended agent or the timeout, then
-// retires the run's session.
-func (s *Server) watchOverview(base string, run *OverviewRun, sess domain.Session) {
-	ctx := context.Background()
+// watchOverview waits for a valid report, an ended agent, the timeout or
+// serve's close, then retires the run's session.
+func (s *Server) watchOverview(ctx context.Context, base string, run *OverviewRun, sess domain.Session) {
 	timeout := s.overviewTimeout
 	if timeout <= 0 {
 		timeout = config.DefaultOverviewTimeout
@@ -277,11 +352,23 @@ func (s *Server) watchOverview(base string, run *OverviewRun, sess domain.Sessio
 	tick := time.NewTicker(poll)
 	defer tick.Stop()
 	w := &overviewWatch{base: base, run: run, sess: sess, timeout: timeout}
-	for range tick.C {
-		if s.overviewStep(ctx, w, time.Now()) {
+	for {
+		select {
+		case <-ctx.Done():
+			s.finishOverview(ctx, base, run, sess, OverviewFailed, "", nil, overviewClosing)
+			return
+		case <-tick.C:
+		}
+		if s.overviewEnded(run) || s.overviewStep(ctx, w, time.Now()) {
 			return
 		}
 	}
+}
+
+func (s *Server) overviewEnded(run *OverviewRun) bool {
+	s.overviewMu.Lock()
+	defer s.overviewMu.Unlock()
+	return run.ended() || run.finishing
 }
 
 // overviewWatch is one run's watcher state.
@@ -310,6 +397,11 @@ func (s *Server) overviewStep(ctx context.Context, w *overviewWatch, now time.Ti
 			w.asked = true
 			s.steer.Enqueue(SteerNote{SessionID: w.sess.ID, Author: domain.AuthorAiman,
 				Text: "[aiman] " + overview.ReportFile + " is not valid: " + err.Error() + ". Write the four sections exactly as the brief says."})
+			s.updateOverview(w.base, w.run, StepReport, func(r *OverviewRun, _ time.Time) {
+				if st := r.step(StepReport); st != nil {
+					st.Detail = "reminded: " + err.Error()
+				}
+			})
 		}
 	}
 	ended := !serverTerminal{s}.Alive(ctx, w.sess)
@@ -348,42 +440,83 @@ func readOverviewReport(path string) (string, bool) {
 	return string(b), true
 }
 
-// finishOverview records the outcome, retires the session and removes the
-// run's scratch directory.
+// finishOverview records the outcome, retires the session (when sess has an
+// id) and removes the run's scratch directory. A done run marks report and
+// cleanup done; a failed run fails its running step and leaves later steps
+// pending. It runs once per run, on a context serve's close cannot cut.
 func (s *Server) finishOverview(ctx context.Context, base string, run *OverviewRun, sess domain.Session, state, md string, report *overview.Report, why string) {
-	if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
-		log.Printf("overview %s: stop: %v", run.ID, err)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	s.overviewMu.Lock()
+	if run.ended() || run.finishing {
+		s.overviewMu.Unlock()
+		return
 	}
-	if err := s.dropSession(ctx, sess, overviewEndedReason); err != nil {
-		log.Printf("overview %s: forget: %v", run.ID, err)
+	run.finishing = true
+	s.overviewMu.Unlock()
+
+	if state == OverviewDone {
+		detail := "report written"
+		if report != nil {
+			detail = fmt.Sprintf("4 sections, %d need you", len(report.NeedsYou))
+		}
+		s.updateOverview(base, run, StepReport, func(r *OverviewRun, now time.Time) {
+			r.endStep(StepReport, detail, now)
+			r.startStep(StepCleanup, now)
+		})
 	}
-	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": overviewEndedReason})
+
+	if sess.ID != "" {
+		if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
+			log.Printf("overview %s: stop: %v", run.ID, err)
+		}
+		if err := s.dropSession(ctx, sess, overviewEndedReason); err != nil {
+			log.Printf("overview %s: forget: %v", run.ID, err)
+		}
+		s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionEnded, map[string]any{"reason": overviewEndedReason})
+	}
 	dir := filepath.Join(base, run.ID)
 	if filepath.Dir(dir) == filepath.Clean(base) {
 		if err := os.RemoveAll(dir); err != nil {
 			log.Printf("overview %s: remove %s: %v", run.ID, dir, err)
 		}
 	}
-	ended := time.Now().UTC()
+
+	step := StepCleanup
 	s.overviewMu.Lock()
-	run.State, run.EndedAt, run.Error, run.Report = state, &ended, why, report
+	now := time.Now().UTC()
 	if state == OverviewDone {
-		run.Markdown = md
+		run.endStep(StepCleanup, "", now)
+		run.Markdown, run.Report = md, report
+		if report != nil {
+			n := len(report.NeedsYou)
+			run.NeedsYou = &n
+		}
+	} else {
+		for _, st := range run.Steps {
+			if st.State == StepRunning {
+				step = st.Name
+			}
+		}
+		run.failRunningStep(why, now)
 	}
-	s.overview.running = nil
-	snapshot := *run
+	run.State, run.EndedAt = state, &now
+	if s.overview.running == run {
+		s.overview.running = nil
+	}
+	snapshot := run.clone()
 	s.overviewMu.Unlock()
 	s.saveOverview(base, &snapshot)
 	s.pruneOverviews(base)
 	payload := map[string]any{"run": run.ID, "state": state}
-	if why != "" {
-		payload["error"] = why
+	if snapshot.Error != "" {
+		payload["error"] = snapshot.Error
 	}
-	if report != nil {
-		payload["needs_you"] = len(report.NeedsYou)
+	if snapshot.NeedsYou != nil {
+		payload["needs_you"] = *snapshot.NeedsYou
 	}
 	s.appendEvent(ctx, domain.OverviewLedger, domain.EventActorAiman, domain.EventOverviewFinished, payload)
-	s.publishOverview(&snapshot)
+	s.publishOverview(&snapshot, step)
 }
 
 func (s *Server) clearOverview(run *OverviewRun) {
@@ -394,15 +527,12 @@ func (s *Server) clearOverview(run *OverviewRun) {
 	s.overviewMu.Unlock()
 }
 
-func (s *Server) publishOverview(run *OverviewRun) {
+// publishOverview sends the hub event overview {id, status, step}: a signal
+// to read the run again, not its state.
+func (s *Server) publishOverview(run *OverviewRun, step string) {
 	if s.hub != nil {
-		s.hub.Publish(SessionEvent{Type: "overview", ID: run.ID, Status: run.State})
+		s.hub.Publish(SessionEvent{Type: "overview", ID: run.ID, Status: run.State, Step: step})
 	}
-}
-
-// public is the run as clients get it while it may still change.
-func (r *OverviewRun) public() OverviewRun {
-	return *r
 }
 
 func (s *Server) saveOverview(base string, run *OverviewRun) {
@@ -465,8 +595,10 @@ func (s *Server) pruneOverviews(base string) {
 }
 
 // CleanStaleOverviews ends runs a previous serve left starting or running:
-// their watcher died with it. Each one's session is retired and the run is
-// recorded as failed. Serve calls it once at start.
+// their goroutine died with it. The step that was running fails with "serve
+// restarted", the run's session is retired (found by its name when the run
+// never recorded its id) and the run is recorded as failed. Serve calls it
+// once at start.
 func (s *Server) CleanStaleOverviews(ctx context.Context) {
 	base := s.overviewBase()
 	if base == "" {
@@ -477,25 +609,41 @@ func (s *Server) CleanStaleOverviews(ctx context.Context) {
 			continue
 		}
 		run := r
-		sess, ok := s.sessionByID(ctx, run.Session)
-		if !ok {
-			sess = domain.Session{ID: run.Session}
-		}
-		if run.Session == "" {
-			ended := time.Now().UTC()
-			run.State, run.EndedAt, run.Error = OverviewFailed, &ended, "serve restarted"
-			s.saveOverview(base, &run)
-			continue
+		var sess domain.Session
+		if run.Session != "" {
+			var ok bool
+			if sess, ok = s.sessionByID(ctx, run.Session); !ok {
+				sess = domain.Session{ID: run.Session}
+			}
+		} else {
+			sess = s.unrecordedOverviewSession(ctx, run.ID)
 		}
 		s.finishOverview(ctx, base, &run, sess, OverviewFailed, "", nil, "serve restarted")
 	}
 }
 
+// unrecordedOverviewSession is the stored overview-role session named
+// overview-<run>, which a serve saved before the run recorded its id.
+func (s *Server) unrecordedOverviewSession(ctx context.Context, runID string) domain.Session {
+	list, err := s.loadSessions(ctx)
+	if err != nil {
+		return domain.Session{}
+	}
+	for _, sess := range list {
+		if sess.Role == domain.SessionRoleOverview && sess.Name == "overview-"+runID {
+			return sess
+		}
+	}
+	return domain.Session{}
+}
+
 // handleOverviewGet answers the named run, else the running one, else the
-// newest finished run.
+// newest done run, plus latest: the newest run of any state without its
+// text. With summary it answers latest alone.
 func (s *Server) handleOverviewGet(req Request) Response {
 	var p struct {
-		Run string `json:"run"`
+		Run     string `json:"run"`
+		Summary bool   `json:"summary"`
 	}
 	if len(req.Params) > 0 {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -509,11 +657,19 @@ func (s *Server) handleOverviewGet(req Request) Response {
 	s.overviewMu.Lock()
 	var running *OverviewRun
 	if s.overview.running != nil {
-		r := *s.overview.running
+		r := s.overview.running.clone()
 		running = &r
 	}
 	s.overviewMu.Unlock()
 	runs := loadOverviews(base)
+	latest := latestOverview(running, runs)
+	if p.Summary {
+		result := map[string]any{"type": "overview_run"}
+		if latest != nil {
+			result["latest"] = latest
+		}
+		return Response{ID: req.ID, Result: result}
+	}
 	var found *OverviewRun
 	switch {
 	case p.Run != "":
@@ -545,7 +701,31 @@ func (s *Server) handleOverviewGet(req Request) Response {
 	if running != nil && found.ID != running.ID {
 		result["running"] = running.ID
 	}
+	if latest != nil {
+		result["latest"] = latest
+	}
 	return Response{ID: req.ID, Result: result}
+}
+
+// latestOverview is the newest run of any state, the running one first,
+// without markdown and report; a run kept before needs_you was recorded
+// gets it from its report.
+func latestOverview(running *OverviewRun, runs []OverviewRun) *OverviewRun {
+	var l OverviewRun
+	switch {
+	case running != nil:
+		l = running.clone()
+	case len(runs) > 0:
+		l = runs[0].clone()
+	default:
+		return nil
+	}
+	if l.NeedsYou == nil && l.Report != nil {
+		n := len(l.Report.NeedsYou)
+		l.NeedsYou = &n
+	}
+	l.Markdown, l.Report = "", nil
+	return &l
 }
 
 // handleOverviewList answers the kept runs, newest first, without their text.
