@@ -298,6 +298,9 @@ func runServe() error {
 	srv.SetOverviewDir(filepath.Join(dir, "overviews"))
 	srv.SetOverviewTimeout(cfg.Overview.RunTimeout())
 	srv.CleanStaleOverviews(ctx)
+	// Deferred after ptyMgr.CloseAll, so it runs first: the run records its
+	// end while the terminal runtime still answers.
+	defer srv.CloseOverview()
 	if g := srv.CILandGate(); g != nil {
 		srv.SetLandGate(g)
 	}
@@ -339,7 +342,7 @@ func runServe() error {
 	}
 
 	hostUpdates := newHostUpdates(cfg.Host.Update, dir, version, hostUpdateDeps{
-		Busy: []func() int{srv.Inflight, awsEngine.Pending, handovers.Starting, agentUpdates.Updating},
+		Busy: []func() int{srv.Inflight, awsEngine.Pending, handovers.Starting, srv.OverviewStarting, agentUpdates.Updating},
 	})
 	startHostUpdates(ctx, srv, hostUpdates, host)
 	srv.SetDaemonControl(newHostDaemons(hostUpdates, version, home))

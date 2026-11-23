@@ -14,7 +14,7 @@ import (
 
 const (
 	// overviewPollEvery is how often `aiman overview run --wait` asks.
-	overviewPollEvery = 5 * time.Second
+	overviewPollEvery = 2 * time.Second
 	// overviewWaitFor outlasts the default run timeout.
 	overviewWaitFor = 11 * time.Minute
 )
@@ -76,10 +76,18 @@ func runOverview(args []string, out io.Writer) error {
 			if asJSON {
 				return writeJSON(res)
 			}
-			fmt.Fprintf(out, "overview %s started with %s (%d sessions); aiman overview shows it when done\n", run.ID, run.Agent, run.Sessions)
+			fmt.Fprintf(out, "started %s\n", run.ID)
 			return nil
 		}
+		if !asJSON {
+			fmt.Fprintf(out, "started %s\n", run.ID)
+		}
+		printed := map[string]string{}
+		printOverviewSteps(out, run, printed, asJSON)
 		for waited := time.Duration(0); waited < overviewWaitFor; waited += overviewPollEvery {
+			if run.State == server.OverviewDone || run.State == server.OverviewFailed {
+				break
+			}
 			time.Sleep(overviewPollEvery)
 			res, err = callOverview(sock, "overview.get", map[string]any{"run": run.ID})
 			if err != nil {
@@ -88,13 +96,12 @@ func runOverview(args []string, out io.Writer) error {
 			if run, err = overviewRunOf(res); err != nil {
 				return err
 			}
-			if run.State == server.OverviewDone || run.State == server.OverviewFailed {
-				break
-			}
+			printOverviewSteps(out, run, printed, asJSON)
 		}
 		if asJSON {
 			return writeJSON(res)
 		}
+		fmt.Fprintln(out)
 		return formatOverview(out, run)
 	default:
 		params := map[string]any{}
@@ -143,6 +150,28 @@ func overviewRunOf(res any) (server.OverviewRun, error) {
 	}
 	err := decodeInto(res, &wrapped)
 	return wrapped.Run, err
+}
+
+// printOverviewSteps prints each step whose state, detail or error changed
+// since the last call; printed remembers what was shown. Nothing is printed
+// for --json.
+func printOverviewSteps(out io.Writer, run server.OverviewRun, printed map[string]string, quiet bool) {
+	for _, st := range run.Steps {
+		line := st.Label + ": " + st.State
+		if st.Detail != "" {
+			line += " · " + st.Detail
+		}
+		if st.Error != "" {
+			line += " · " + st.Error
+		}
+		if st.State == server.StepPending || printed[st.Name] == line {
+			continue
+		}
+		printed[st.Name] = line
+		if !quiet {
+			fmt.Fprintln(out, "  "+line)
+		}
+	}
 }
 
 // formatOverview prints a run: its report when done, else its state.

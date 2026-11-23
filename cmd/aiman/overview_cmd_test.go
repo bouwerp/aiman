@@ -33,3 +33,25 @@ func TestRunOverviewRefusesUnknownSubcommands(t *testing.T) {
 		t.Fatalf("err = %v, want usage", err)
 	}
 }
+
+func TestPrintOverviewStepsPrintsEachChangeOnce(t *testing.T) {
+	run := server.OverviewRun{Steps: []server.OverviewStep{
+		{Name: "collect", Label: "collect sessions", State: server.StepDone, Detail: "3 sessions"},
+		{Name: "start_agent", Label: "start agent", State: server.StepRunning},
+		{Name: "report", Label: "write report", State: server.StepPending},
+	}}
+	printed := map[string]string{}
+	var b strings.Builder
+	printOverviewSteps(&b, run, printed, false)
+	printOverviewSteps(&b, run, printed, false)
+	want := "  collect sessions: done · 3 sessions\n  start agent: running\n"
+	if b.String() != want {
+		t.Fatalf("got %q, want %q", b.String(), want)
+	}
+	run.Steps[1].State, run.Steps[1].Error = server.StepFailed, "boot wait timed out"
+	b.Reset()
+	printOverviewSteps(&b, run, printed, false)
+	if b.String() != "  start agent: failed · boot wait timed out\n" {
+		t.Fatalf("got %q", b.String())
+	}
+}
