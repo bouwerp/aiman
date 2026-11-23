@@ -133,10 +133,13 @@ func (m *Model) resourcesAfterDiscovery() tea.Cmd {
 func (m *Model) applyResourcesMsg(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case resourcesTickMsg:
+		// The overview banner shows on every view: unread hosts and runs in
+		// progress are read on each tick.
+		status := m.fetchOverviewStatusAll()
 		if m.state == viewStateMain && m.currentTab == tabSessions {
-			return tea.Batch(m.fetchResourcesAll(), resourcesTick())
+			return tea.Batch(m.fetchResourcesAll(), status, resourcesTick())
 		}
-		return resourcesTick()
+		return tea.Batch(status, resourcesTick())
 	case resourcesMsg:
 		delete(m.res.inflight, msg.host)
 		if msg.err != nil || !msg.report.Supported {
@@ -240,7 +243,7 @@ func (m *Model) headerGauge() string {
 			parts = append(parts, g)
 		}
 	}
-	if o := m.overviewHeaderPart(); o != "" {
+	if o := m.overviewBannerFor(m.gaugeHost()); o != "" {
 		parts = append(parts, o)
 	}
 	return strings.Join(parts, a1Text(" ", a1Dim, false, false))

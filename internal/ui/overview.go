@@ -17,13 +17,9 @@ import (
 	"github.com/bouwerp/aiman/internal/usecase"
 )
 
-const (
-	// overviewPollEvery is how often the open page re-reads a running run.
-	overviewPollEvery = 5 * time.Second
-	// overviewRPCTimeout covers the SSH round trip and serve building the
-	// bundle and starting the agent.
-	overviewRPCTimeout = 60 * time.Second
-)
+// overviewRPCTimeout bounds every overview call; serve answers overview.run
+// at once and does the slow work in the background.
+const overviewRPCTimeout = 30 * time.Second
 
 // overviewRPC calls one overview.* method on a remote's agent API. Tests
 // replace it.
@@ -38,18 +34,19 @@ type overviewView struct {
 	run     *server.OverviewRun
 	loading bool
 	// none is true when serve has no overview yet.
-	none       bool
-	err        string
-	notice     string
-	scroll     int
-	pollQueued bool
+	none   bool
+	err    string
+	notice string
+	scroll int
 }
 
 type overviewMsg struct {
 	host string
 	run  *server.OverviewRun
-	none bool
-	err  error
+	// latest is the newest run of any state, without its text.
+	latest *server.OverviewRun
+	none   bool
+	err    error
 }
 
 type overviewStartedMsg struct {
@@ -57,8 +54,6 @@ type overviewStartedMsg struct {
 	run  *server.OverviewRun
 	err  error
 }
-
-type overviewPollMsg struct{ host string }
 
 // overviewGetCmd reads overview.get, waiting for a foreground budget slot.
 func (m *Model) overviewGetCmd(r config.Remote) tea.Cmd {
@@ -85,12 +80,13 @@ func overviewResult(host string, raw json.RawMessage, err error) overviewMsg {
 		return overviewMsg{host: host, err: err}
 	}
 	var res struct {
-		Run server.OverviewRun `json:"run"`
+		Run    server.OverviewRun  `json:"run"`
+		Latest *server.OverviewRun `json:"latest"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return overviewMsg{host: host, err: fmt.Errorf("overview.get: %w", err)}
 	}
-	return overviewMsg{host: host, run: &res.Run}
+	return overviewMsg{host: host, run: &res.Run, latest: res.Latest}
 }
 
 func overviewRunCmd(r config.Remote) tea.Cmd {
@@ -109,10 +105,6 @@ func overviewRunCmd(r config.Remote) tea.Cmd {
 		}
 		return overviewStartedMsg{host: r.Host, run: &res.Run}
 	}
-}
-
-func overviewPollCmd(host string) tea.Cmd {
-	return tea.Tick(overviewPollEvery, func(time.Time) tea.Msg { return overviewPollMsg{host: host} })
 }
 
 // overviewRemote is the host of the selected session, else the first remote
@@ -157,7 +149,7 @@ func (m *Model) handleOverviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		v.scroll++
 	case "r":
-		if v.run != nil && (v.run.State == server.OverviewRunning || v.run.State == server.OverviewStarting) {
+		if m.overviewBusy(v) {
 			v.notice = "a run is already in progress"
 			return m, nil
 		}
@@ -171,22 +163,32 @@ func (m *Model) handleOverviewUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// routeOverviewMsg applies overview results on any view: the answer also
-// sets the host's needs-you count shown in the header.
+// overviewBusy is true while the host's newest run is in progress.
+func (m *Model) overviewBusy(v *overviewView) bool {
+	if st := m.overviewStatus[v.remote.Host]; st != nil && st.read {
+		return runInProgress(st.latest)
+	}
+	return runInProgress(v.run)
+}
+
+// routeOverviewMsg applies overview results on any view.
 func (m *Model) routeOverviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	v := m.overview
 	switch msg := msg.(type) {
+	case overviewStatusMsg:
+		return m, m.applyOverviewStatus(msg)
 	case overviewMsg:
+		drain := m.drainPending()
 		if msg.err == nil {
-			m.setOverviewNeeds(msg.host, msg.run)
+			m.noteLatest(msg.host, msg.latest, msg.run)
 		}
 		if v == nil || v.remote.Host != msg.host {
-			return m, nil
+			return m, drain
 		}
 		v.loading = false
 		if msg.err != nil {
 			v.err = msg.err.Error()
-			return m, nil
+			return m, drain
 		}
 		v.err = ""
 		v.none = msg.none
@@ -195,11 +197,11 @@ func (m *Model) routeOverviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 				v.scroll = 0
 			}
 			v.run = msg.run
-			if msg.run.State == server.OverviewDone || msg.run.State == server.OverviewFailed {
+			if !runInProgress(msg.run) {
 				v.notice = ""
 			}
 		}
-		return m, m.maybePollOverview()
+		return m, drain
 	case overviewStartedMsg:
 		if v == nil || v.remote.Host != msg.host {
 			return m, nil
@@ -212,74 +214,37 @@ func (m *Model) routeOverviewMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.none = false
 		v.run = msg.run
 		v.scroll = 0
-		v.notice = "running; the page updates when it finishes"
-		return m, m.maybePollOverview()
-	case overviewPollMsg:
-		if v == nil || v.remote.Host != msg.host {
-			return m, nil
-		}
-		v.pollQueued = false
-		if m.state != viewStateOverview || !v.inProgress() {
-			return m, nil
-		}
-		return m, m.overviewGetCmd(v.remote)
+		v.notice = "running; the page follows its steps"
+		m.noteLatest(msg.host, msg.run, nil)
+		return m, nil
 	}
 	return m, nil
 }
 
-func (v *overviewView) inProgress() bool {
-	return v.run != nil && (v.run.State == server.OverviewRunning || v.run.State == server.OverviewStarting)
-}
-
-func (m *Model) maybePollOverview() tea.Cmd {
-	v := m.overview
-	if v == nil || v.pollQueued || m.state != viewStateOverview || !v.inProgress() {
-		return nil
+// noteLatest records the newest run a full read or a start brought, for the
+// banner, when the summary has not seen it yet.
+func (m *Model) noteLatest(host string, latest, run *server.OverviewRun) {
+	if latest == nil {
+		latest = run
 	}
-	v.pollQueued = true
-	return overviewPollCmd(v.remote.Host)
-}
-
-// setOverviewNeeds keeps the needs-you count of the newest done overview per
-// host for the header.
-func (m *Model) setOverviewNeeds(host string, run *server.OverviewRun) {
-	if run == nil || run.State != server.OverviewDone || run.Report == nil {
+	if latest == nil {
 		return
 	}
-	if m.overviewNeeds == nil {
-		m.overviewNeeds = map[string]int{}
+	if m.overviewStatus == nil {
+		m.overviewStatus = map[string]*overviewHostStatus{}
 	}
-	m.overviewNeeds[host] = len(run.Report.NeedsYou)
-}
-
-// overviewEventFetch rereads a host's overview when serve says a run
-// changed, so the header count and an open page follow it.
-func (m *Model) overviewEventFetch(host string) tea.Cmd {
-	for _, r := range agentAPIRemotes(m.cfg) {
-		if r.Host == host {
-			release, ok := m.budgetTry(host)
-			if !ok {
-				return nil
-			}
-			return func() tea.Msg {
-				ctx, cancel := context.WithTimeout(context.Background(), overviewRPCTimeout)
-				defer cancel()
-				raw, err := overviewRPC(ctx, r, "overview.get", map[string]any{})
-				release(callTimedOut(err))
-				return overviewResult(host, raw, err)
-			}
-		}
+	st := m.overviewStatus[host]
+	if st == nil {
+		st = &overviewHostStatus{}
+		m.overviewStatus[host] = st
 	}
-	return nil
-}
-
-// overviewHeaderPart is "overview: n need you" for the gauge host, or "".
-func (m *Model) overviewHeaderPart() string {
-	n := m.overviewNeeds[m.gaugeHost()]
-	if n == 0 {
-		return ""
+	c := *latest
+	c.Markdown, c.Report = "", nil
+	if c.State == server.OverviewDone && c.NeedsYou == nil && latest.Report != nil {
+		n := len(latest.Report.NeedsYou)
+		c.NeedsYou = &n
 	}
-	return a1Text(fmt.Sprintf("overview: %d need you", n), resourceColor(true), false, false)
+	st.latest, st.read, st.readAt = &c, true, time.Now()
 }
 
 // handleHostPageUpdate and renderHostPage serve the per-host pages opened
@@ -322,26 +287,7 @@ func (m *Model) renderOverviewView() string {
 	case v.run == nil && v.none:
 		lines = append(lines, "No overview yet. Press r to run one.")
 	case v.run != nil:
-		r := v.run
-		meta := r.State + " · " + r.StartedAt.Local().Format("2006-01-02 15:04") + " · " + r.Agent
-		if r.Sessions > 0 {
-			meta += fmt.Sprintf(" · %d sessions", r.Sessions)
-		}
-		lines = append(lines, dimStyle.Render(meta), "")
-		switch r.State {
-		case server.OverviewDone:
-			for _, l := range strings.Split(strings.TrimRight(r.Markdown, "\n"), "\n") {
-				if h, ok := strings.CutPrefix(l, "## "); ok {
-					lines = append(lines, "", headStyle.Render(h))
-					continue
-				}
-				lines = append(lines, strings.Split(ansi.Wordwrap(l, width, " "), "\n")...)
-			}
-		case server.OverviewFailed:
-			lines = append(lines, errStyle.Render("Failed: "+r.Error), "", "Press r to run again.")
-		default:
-			lines = append(lines, "Running for "+time.Since(r.StartedAt).Round(time.Second).String()+"…")
-		}
+		lines = m.overviewLines(v, width, dimStyle, headStyle, errStyle)
 	}
 	if v.scroll > len(lines)-1 {
 		v.scroll = max(0, len(lines)-1)
@@ -364,4 +310,85 @@ func (m *Model) renderOverviewView() string {
 	}
 	b.WriteString("  " + dimStyle.Render("r run · R reload · j/k scroll · esc back") + "\n")
 	return docStyle.Render(b.String())
+}
+
+// overviewLines draws the newest run's header, steps and outcome, then the
+// report: the run's own when it is done, else the older done run's with its
+// time.
+func (m *Model) overviewLines(v *overviewView, width int, dim, head, errStyle lipgloss.Style) []string {
+	newest := v.run
+	if st := m.overviewStatus[v.remote.Host]; st != nil && st.latest != nil {
+		if l := st.latest; l.ID != v.run.ID || runInProgress(l) || l.State != v.run.State {
+			// The summary is newer than the full read: its steps and state
+			// are fresher, and a different run is the newest.
+			c := *l
+			if l.ID == v.run.ID {
+				c.Markdown, c.Report = v.run.Markdown, v.run.Report
+			}
+			newest = &c
+		}
+	}
+	r := newest
+	meta := r.State + " · " + r.StartedAt.Local().Format("2006-01-02 15:04") + " · " + r.Agent
+	if r.Sessions > 0 {
+		meta += fmt.Sprintf(" · %d sessions", r.Sessions)
+	}
+	lines := []string{dim.Render(meta), ""}
+	for _, s := range r.Steps {
+		lines = append(lines, overviewStepLine(s, dim, errStyle))
+	}
+	if len(r.Steps) > 0 {
+		lines = append(lines, "")
+	}
+	switch r.State {
+	case server.OverviewDone:
+		lines = append(lines, overviewReportLines(r.Markdown, width, head)...)
+	case server.OverviewFailed:
+		lines = append(lines, errStyle.Render("Failed: "+r.Error), "", "Press r to run again.")
+		if o := v.run; o.ID != r.ID && o.State == server.OverviewDone {
+			lines = append(lines, "", dim.Render("Last report, "+o.StartedAt.Local().Format("2006-01-02 15:04")+":"))
+			lines = append(lines, overviewReportLines(o.Markdown, width, head)...)
+		}
+	}
+	return lines
+}
+
+func overviewReportLines(markdown string, width int, head lipgloss.Style) []string {
+	var lines []string
+	for _, l := range strings.Split(strings.TrimRight(markdown, "\n"), "\n") {
+		if h, ok := strings.CutPrefix(l, "## "); ok {
+			lines = append(lines, "", head.Render(h))
+			continue
+		}
+		lines = append(lines, strings.Split(ansi.Wordwrap(l, width, " "), "\n")...)
+	}
+	return lines
+}
+
+// overviewStepLine is one step: ✓ label, duration and detail; ▸ label and
+// time so far; ✗ label and its error; · label while pending.
+func overviewStepLine(s server.OverviewStep, dim, errStyle lipgloss.Style) string {
+	switch s.State {
+	case server.StepDone:
+		line := "✓ " + s.Label
+		if s.StartedAt != nil && s.EndedAt != nil {
+			line += "  " + s.EndedAt.Sub(*s.StartedAt).Round(time.Second).String()
+		}
+		if s.Detail != "" {
+			line += "  " + dim.Render(s.Detail)
+		}
+		return line
+	case server.StepRunning:
+		line := "▸ " + s.Label
+		if s.StartedAt != nil {
+			line += "  " + clockSince(*s.StartedAt)
+		}
+		if s.Detail != "" {
+			line += "  " + dim.Render(s.Detail)
+		}
+		return line
+	case server.StepFailed:
+		return errStyle.Render("✗ " + s.Label + "  " + s.Error)
+	}
+	return dim.Render("· " + s.Label)
 }

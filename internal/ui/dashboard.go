@@ -355,13 +355,13 @@ type Model struct {
 	state           viewState
 	list            list.Model
 	daemonList      list.Model
-	daemons         map[string]domain.Daemon // Keyed by domain.DaemonKey(host, kind)
-	agentAPICursor  int                      // selected remote on the Agent API settings page
-	agentAPIProbing map[string]bool          // host → probe SSH call in flight
-	agentUpdates    *agentUpdatesView        // "Agents on <host>" page state
-	overview        *overviewView            // Overview page state
-	overviewNeeds   map[string]int           // host → needs-you count of its newest overview
-	gatewayPair     *gatewayPairView         // phone pairing page state
+	daemons         map[string]domain.Daemon       // Keyed by domain.DaemonKey(host, kind)
+	agentAPICursor  int                            // selected remote on the Agent API settings page
+	agentAPIProbing map[string]bool                // host → probe SSH call in flight
+	agentUpdates    *agentUpdatesView              // "Agents on <host>" page state
+	overview        *overviewView                  // Overview page state
+	overviewStatus  map[string]*overviewHostStatus // host → newest overview run, for the header banner
+	gatewayPair     *gatewayPairView               // phone pairing page state
 	currentTab      mainTab
 	menu            list.Model
 	remotes         RemotesModel
@@ -2762,6 +2762,7 @@ func (m *Model) Init() tea.Cmd {
 		pollAWSCredExpiryCmd(m.cfg),
 		tickAWSCredTable(),
 		checkGitHubRelease(),
+		m.fetchOverviewStatusAll(),
 	)
 }
 
