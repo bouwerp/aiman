@@ -278,7 +278,7 @@ func renewAllDelegatedCredentialsCmd(cfg *config.Config) tea.Cmd {
 			timeout := time.Duration(len(group)+1) * 90 * time.Second
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			for _, t := range group {
-				_, note, err := pushFreshCredentials(ctx, mgr, t.del, t.profile)
+				_, note, err := pushFreshCredentials(ctx, mgr, freshDelegation(t.remote, t.del), t.profile)
 				if err != nil {
 					result.failures = append(result.failures, fmt.Sprintf("%s [%s]: %v", t.userAtHost, t.profile, err))
 					continue

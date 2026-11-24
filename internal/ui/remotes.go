@@ -644,6 +644,7 @@ func pushAWSDelegation(host, user, root string, d *config.AWSDelegation) tea.Cmd
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 
+		d = freshDelegation(config.Remote{Host: host, User: user}, d)
 		mgr := ssh.NewManager(ssh.Config{Host: host, User: user, Root: root})
 		if err := mgr.Connect(ctx); err != nil {
 			return awsPushMsg{err: err}
