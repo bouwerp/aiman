@@ -608,7 +608,7 @@ func (m AWSCredentialsModel) renewCmd(e awsHostEntry) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 
-		expiresAt, note, err := pushFreshCredentials(ctx, mgr, d, profile)
+		expiresAt, note, err := pushFreshCredentials(ctx, mgr, freshDelegation(remote, d), profile)
 		return awsCredRenewResultMsg{key: key, err: err, expiresAt: expiresAt, note: note}
 	}
 }
@@ -665,7 +665,7 @@ func (m AWSCredentialsModel) renewHostCmd(entries []awsHostEntry) tea.Cmd {
 
 		results := make(awsCredBatchRenewResultMsg, 0, len(entriesCopy))
 		for _, e := range entriesCopy {
-			expiresAt, note, err := pushFreshCredentials(ctx, mgr, e.del, e.remoteProfile)
+			expiresAt, note, err := pushFreshCredentials(ctx, mgr, freshDelegation(e.remote, e.del), e.remoteProfile)
 			results = append(results, awsCredRenewResultMsg{key: e.key, err: err, expiresAt: expiresAt, note: note})
 		}
 		return results
