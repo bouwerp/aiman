@@ -15,6 +15,8 @@ import (
 func init() {
 	registerSlack("send", slackCommand{run: runSlackSend, write: slackAlwaysWrite,
 		usage: "--channel <name|C…> (--text t | --text - | --text-file f) [--thread <ts|link>] [--broadcast] [--no-unfurl]" + slackLinkHelp})
+	registerSlack("draft", slackCommand{run: runSlackDraft, write: slackAlwaysWrite,
+		usage: "--channel <name|C…|U…> (--text t | --text - | --text-file f) [--thread <ts|link>] [--broadcast]\n       Saves a draft in your Drafts & Sent without sending it. One draft per channel; aiman cannot edit or delete it." + slackLinkHelp})
 	registerSlack("react", slackCommand{run: runSlackReact, write: slackAlwaysWrite,
 		usage: "--channel <name|C…> --ts <ts|link> --emoji name" + slackLinkHelp})
 	registerSlack("wait", slackCommand{run: runSlackWait,
@@ -51,6 +53,31 @@ func runSlackSend(ctx context.Context, args []string, in io.Reader, out, errOut 
 		return slackAPI(errOut, err)
 	}
 	return slackWrite(out, posted)
+}
+
+func runSlackDraft(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
+	flags, _ := slackFlags(args, "broadcast")
+	if flags["broadcast"] != "" && flags["thread"] == "" {
+		return slackFail(errOut, "slack_params", "--broadcast needs --thread")
+	}
+	c, channel, err := slackChannel(ctx, flags, errOut)
+	if err != nil {
+		return err
+	}
+	text, err := slackText(flags, in)
+	if err != nil {
+		return slackFail(errOut, "slack_params", err.Error())
+	}
+	d, err := c.Draft(ctx, slack.DraftRequest{
+		Channel:   channel,
+		Text:      text,
+		Thread:    flags["thread"],
+		Broadcast: flags["broadcast"] != "",
+	})
+	if err != nil {
+		return slackAPI(errOut, err)
+	}
+	return slackWrite(out, d)
 }
 
 func runSlackReact(ctx context.Context, args []string, _ io.Reader, out, errOut io.Writer) error {

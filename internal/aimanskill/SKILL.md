@@ -460,6 +460,7 @@ Writes (they post or change Slack as the approving member):
 
 ```bash
 aiman slack send --channel engineering --text-file note.md [--thread ts] [--broadcast] [--no-unfurl]
+aiman slack draft --channel engineering --text-file note.md [--thread ts] [--broadcast]   # saves, does not send
 aiman slack react --channel C012 --ts 1711.000100 --emoji eyes
 aiman slack schedule --channel C012 --at +2h --text "Reminder"   # or --at 2026-11-20T09:00:00Z
 aiman slack schedule cancel Q012 --channel C012
@@ -481,7 +482,7 @@ aiman slack dm U1[,U2]
 - Anything that pages returns `next_cursor`; pass it back with `--cursor`. `search` returns one page per call: Slack allows about 10 searches a minute, so page only as far as you need. DM results need each member's consent in Slack first.
 - `canvas edit` makes one change per call: `append`, `prepend`, `after`/`before` (need `--section`), `replace` and `delete` (need `--section`; replacing the whole canvas needs `--all`), `rename`. Section ids come from `canvas read`.
 - `list set` and `list add` take column names and option labels as you see them in Slack; aiman maps them. Columns are fixed when a List is created.
-- Drafts are not possible: Slack has no API for them.
+- `draft` saves a draft in your Drafts & Sent and does not send it. Text goes in as plain text, without markdown formatting. A channel holds one draft: `attached_draft_exists` means delete or send the existing one in Slack first. aiman cannot list, edit or delete drafts.
 - `wait` returns the next message in the thread that is not from the approving member, or exits `slack_timeout`.
 - A host can make agents read-only with `slack.writes: off` in `~/.aiman/config.yaml`; writes then fail with `slack_writes_off`. Tell the operator if you need one.
 
