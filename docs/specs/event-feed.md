@@ -2,7 +2,7 @@
 
 The approved design is `docs/designs/event-feed.md` (a copy of the design page, revision 12). This file is the contract every piece builds against: package names, types, signatures, schemas and wire shapes. When a piece needs a change here, it escalates; it does not change this file.
 
-Acceptance tests carry the build tag `feedaccept` until the final PR removes it, so a piece that is not built yet does not break `go build ./...` for the others. Run them with `go test -tags feedaccept …`.
+Acceptance tests carry build tags until the final PR removes them, so a piece that is not built yet does not break `go build ./...` for the others. Each file builds under `feedaccept` (all pieces) or its own piece tag `feedaccept_<piece>` (`feedaccept_p3a`, `feedaccept_p6` …). A piece runs its tests with its own tag plus the tags of the pieces it depends on in the same package, for example `go test -tags feedaccept_p6,feedaccept_p7 ./internal/feed`. P1, P2 and P5 use plain `feedaccept`.
 
 ## 1. Domain (`internal/domain/feed.go`, P1)
 

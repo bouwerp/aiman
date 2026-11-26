@@ -1,4 +1,4 @@
-//go:build feedaccept
+//go:build feedaccept || feedaccept_p4
 
 package server
 
