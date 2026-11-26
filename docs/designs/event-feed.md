@@ -674,6 +674,6 @@ Phase 2 (a new design round), in this order: first the wider actions `steer_sess
 - **Agent job.** `agentjob.Container` has `Workdir`; `HostCredentials` exists as a func and as the struct `CredentialReader`.
 - **Tests.** Acceptance tests carried per-piece build tags (`feedaccept_<piece>`) while pieces landed; the final commit removed them.
 - **Phone.** P12 landed in the aiman-phone repo on its own `event-feed-with-actions` branch.
-- **Settings.** The laptop has one global `feed` block, which `MarshalServeConfig` pushes to every remote; the Feed settings page's tabs only choose whose status and projection to show, and the page says edits apply to every remote. Per-remote feed settings are not built.
-- **Batch history.** Serve has no `feed.batches` method, so the Feed page shows the batches its actions name plus `feed.status.last_batch`. A `feed.batches` method is a follow-up.
+- **Settings.** The laptop has one global `feed` block, which `MarshalServeConfig` pushes to every remote; the Feed settings page's tabs only choose whose status and projection to show, and the page says edits apply to every remote. Per-remote feed settings are not built; the operator kept one global set ("on global set of settings is fine for now").
+- **Batch history.** `feed.batches {limit?, before?}` (follow-up P13, at the operator's request) lists batches newest first with their action counts; the Feed page, the CLI (`aiman feed batches`) and the gateway read it.
 - **Snoozed actions.** The TUI panel lists proposed, approved and running actions; a snoozed one stays hidden until serve wakes it.
