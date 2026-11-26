@@ -437,3 +437,10 @@ These names and rules are part of the contract. The acceptance tests use them.
 - GitHub: `gh api --include` with `If-None-Match`; a 304 (gh prints it and exits 1) returns no events and keeps the cursors. `ExternalID` is `<notification id>@<updated_at>`, so a later update of the same notification is a new event in the same thread. A PR event's `URL` is its `https://github.com/<owner>/<repo>/pull/<n>` page.
 - Slack: every conversation starts at the time it is first listed. The member's own messages outside a thread are dropped; own replies inside a thread are stored with `Own` true. A bot message's `Actor` is its bot id, and `feed.slack.bots` holds bot ids. The 10-minute listing names its types explicitly.
 - P4 also adds a `cmd/aiman` test for the `feed` row of `hostDaemons`, and the `restart-feed` operation in `selfupdate`.
+
+**As landed by P5 (read before P7)**
+
+- `agentjob.Container` has `Workdir` (empty keeps the image's). A feed job sets `/job`; the image review sets `/bundle`. Codex's `-C` follows it.
+- `agentjob.HostCredentials(home)` returns `CredentialReader{Home, Getenv, Now}.For`; `images.HostCredentials` aliases the struct.
+- Other exports P7 can use: `Supported`, `Egress`, `Prepare`, `Launch`, `IsELF`, `JobDir`, `DefaultTimeout`, `Label`.
+- Job containers still carry the label `aiman.review=1` and the review's error texts. P7 gives feed jobs the label `aiman.feed=1` and job-neutral error texts through `Options`, without changing the image review.
