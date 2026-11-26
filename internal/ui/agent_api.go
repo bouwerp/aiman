@@ -25,7 +25,7 @@ func (m *Model) enterAgentAPI() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, r := range remotes {
 		m.markAgentAPIProbing(r.Host)
-		cmds = append(cmds, m.probeKey(r.Host, remotesvc.KindServe), m.probeKey(r.Host, remotesvc.KindGateway))
+		cmds = append(cmds, m.probeKey(r.Host, remotesvc.KindServe), m.probeKey(r.Host, remotesvc.KindGateway), m.probeKey(r.Host, remotesvc.KindFeed))
 	}
 	return tea.Batch(cmds...)
 }
@@ -107,7 +107,7 @@ func (m *Model) handleAgentAPIUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		if d, ok := m.selectedAgentAPIDaemon(); ok {
 			m.markAgentAPIProbing(d.RemoteHost)
-			return m, tea.Batch(m.probeKey(d.RemoteHost, remotesvc.KindServe), m.probeKey(d.RemoteHost, remotesvc.KindGateway))
+			return m, tea.Batch(m.probeKey(d.RemoteHost, remotesvc.KindServe), m.probeKey(d.RemoteHost, remotesvc.KindGateway), m.probeKey(d.RemoteHost, remotesvc.KindFeed))
 		}
 		return m, nil
 	}
@@ -199,6 +199,9 @@ func (m *Model) renderAgentAPIView() string {
 					b.WriteString("  " + line + "\n")
 				}
 			}
+			if fd, ok := m.daemons[domain.DaemonKey(d.RemoteHost, string(remotesvc.KindFeed))]; ok {
+				b.WriteString("  " + agentAPIFeedLine(fd) + "\n")
+			}
 		}
 		if logs := strings.TrimSpace(d.Logs); logs != "" {
 			b.WriteString("\n" + dimStyle.Render("  Logs") + "\n")
@@ -222,6 +225,14 @@ func agentAPIRTKLine(d domain.Daemon) string {
 
 // rtkGainLine is the per-host line on the $ view. A host without RTK shows
 // nothing.
+// agentAPIFeedLine reports the feed collector's state from its last probe.
+func agentAPIFeedLine(d domain.Daemon) string {
+	if d.Version == "" || d.Version == "missing" {
+		return "feed collector not installed"
+	}
+	return "feed collector " + string(d.Status)
+}
+
 // agentAPIGatewayLine reports the phone gateway's version from its last probe
 // against serve's: "gateway v0.42.0", "gateway behind: v0.41.0", or "gateway
 // not installed". A failed probe shows nothing.

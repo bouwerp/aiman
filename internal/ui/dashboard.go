@@ -208,6 +208,8 @@ func daemonKindLabel(kind string) string {
 		return "agent API"
 	case string(remotesvc.KindGateway):
 		return "phone gateway"
+	case string(remotesvc.KindFeed):
+		return "event feed"
 	case "":
 		return "trigger"
 	default:
@@ -790,7 +792,7 @@ func (m *Model) applyRemoteFilter() {
 		if m.remoteFilter != "" && r.Host != m.remoteFilter {
 			continue
 		}
-		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger), string(remotesvc.KindGateway)} {
+		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger), string(remotesvc.KindGateway), string(remotesvc.KindFeed)} {
 			d, exists := m.daemons[domain.DaemonKey(r.Host, kind)]
 			if !exists {
 				d = domain.Daemon{RemoteHost: r.Host, Kind: kind, Status: domain.DaemonStatusStopped}
@@ -7312,7 +7314,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	// serve/trigger/gateway daemons checked (and, via maybeAutoUpdateServe,
 	// auto-updated if behind).
 	for host := range msg.reachableHosts {
-		for _, kind := range []remotesvc.Kind{remotesvc.KindServe, remotesvc.KindTrigger, remotesvc.KindGateway} {
+		for _, kind := range []remotesvc.Kind{remotesvc.KindServe, remotesvc.KindTrigger, remotesvc.KindGateway, remotesvc.KindFeed} {
 			probes = append(probes, m.probeTick(host, kind))
 		}
 	}
@@ -7687,6 +7689,8 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 			daemonLines = append(daemonLines, "In-pane agents talk to this process (skill / aiman session).")
 		case string(remotesvc.KindGateway):
 			daemonLines = append(daemonLines, "Phone HTTP/WebSocket proxy in front of the agent API socket.")
+		case string(remotesvc.KindFeed):
+			daemonLines = append(daemonLines, "Event feed collector (aiman feed collect).")
 		default:
 			daemonLines = append(daemonLines, "Autonomous GitHub/cron trigger daemon.")
 		}

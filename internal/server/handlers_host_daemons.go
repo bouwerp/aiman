@@ -24,7 +24,7 @@ const (
 )
 
 // daemonKinds are the daemons host.logs and host.restart accept.
-var daemonKinds = []string{"serve", "gateway", "trigger"}
+var daemonKinds = []string{"serve", "gateway", "trigger", "feed"}
 
 // DaemonControl reads and restarts this host's aiman daemons (serve, gateway,
 // trigger). serve wires the real one; tests fake it.
@@ -179,7 +179,7 @@ func (s *Server) daemonParams(ctx context.Context, req Request, what string, p a
 		return nil, &r
 	}
 	if !slices.Contains(daemonKinds, *daemon) {
-		r := errResp(req.ID, CodeInvalidParams, "daemon must be serve, gateway or trigger")
+		r := errResp(req.ID, CodeInvalidParams, "daemon must be serve, gateway, trigger or feed")
 		return nil, &r
 	}
 	return c, nil
