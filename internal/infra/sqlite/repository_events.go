@@ -212,3 +212,47 @@ func (r *Repository) LastEventRowID(ctx context.Context) (int64, error) {
 	}
 	return last, nil
 }
+
+// ScanEventsAfterRowID reads the next window of up to limit ledger rows after
+// afterRowID, whatever their kind, and returns those whose kind is in kinds
+// (all of them when kinds is empty) with scanned, the last rowid of the
+// window. scanned is afterRowID when the window is empty, so a caller's
+// cursor never moves back and never rereads rows that did not match.
+func (r *Repository) ScanEventsAfterRowID(ctx context.Context, afterRowID int64, kinds []domain.EventKind, limit int) (rows []LedgerRow, scanned int64, err error) {
+	if limit <= 0 {
+		limit = defaultSessionEventLimit
+	}
+	want := make(map[domain.EventKind]bool, len(kinds))
+	for _, k := range kinds {
+		want[k] = true
+	}
+	rs, err := r.rd.QueryContext(ctx, `SELECT rowid, session_id, seq, at, actor, kind, payload, hash
+		FROM session_events WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`, afterRowID, limit)
+	if err != nil {
+		return nil, afterRowID, fmt.Errorf("scanning ledger rows: %w", err)
+	}
+	defer rs.Close()
+	scanned = afterRowID
+	for rs.Next() {
+		var row LedgerRow
+		var at time.Time
+		var actor, kind, payload, hash string
+		if err := rs.Scan(&row.RowID, &row.SessionID, &row.Seq, &at, &actor, &kind, &payload, &hash); err != nil {
+			return nil, afterRowID, fmt.Errorf("scanning ledger row: %w", err)
+		}
+		scanned = row.RowID
+		row.At = at.UTC()
+		row.Actor = domain.EventActor(actor)
+		row.Kind = domain.EventKind(kind)
+		if len(want) > 0 && !want[row.Kind] {
+			continue
+		}
+		row.Payload = json.RawMessage(payload)
+		row.Hash = hash
+		rows = append(rows, row)
+	}
+	if err := rs.Err(); err != nil {
+		return nil, afterRowID, fmt.Errorf("scanning ledger rows: %w", err)
+	}
+	return rows, scanned, nil
+}

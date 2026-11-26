@@ -17,7 +17,7 @@ const (
 // ledgerReader is the cross-session ledger read surface of the sqlite
 // repository.
 type ledgerReader interface {
-	ListEventsAfterRowID(ctx context.Context, afterRowID int64, kinds []domain.EventKind, limit int) ([]sqlite.LedgerRow, error)
+	ScanEventsAfterRowID(ctx context.Context, afterRowID int64, kinds []domain.EventKind, limit int) ([]sqlite.LedgerRow, int64, error)
 	LastEventRowID(ctx context.Context) (int64, error)
 }
 
@@ -69,7 +69,7 @@ func (s *Server) handleEventsSince(ctx context.Context, req Request) Response {
 	for _, k := range params.Kinds {
 		kinds = append(kinds, domain.EventKind(k))
 	}
-	rows, err := reader.ListEventsAfterRowID(ctx, params.AfterRowID, kinds, limit)
+	rows, scanned, err := reader.ScanEventsAfterRowID(ctx, params.AfterRowID, kinds, limit)
 	if err != nil {
 		return errResp(req.ID, CodeUnavailable, err.Error())
 	}
@@ -82,7 +82,7 @@ func (s *Server) handleEventsSince(ctx context.Context, req Request) Response {
 			RowID: row.RowID, SessionID: row.SessionID, Seq: row.Seq,
 			At: row.At.Format(time.RFC3339Nano), Actor: row.Actor, Kind: row.Kind, Payload: payload,
 		})
-		next = row.RowID
 	}
+	next = scanned
 	return Response{ID: req.ID, Result: map[string]any{"type": "session_events_since", "events": events, "next": next}}
 }

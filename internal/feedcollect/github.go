@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/bouwerp/aiman/internal/redact"
 )
 
 // GHFunc runs `gh` with args and returns its stdout. On a non-zero exit it
@@ -63,63 +64,136 @@ type ghNotification struct {
 	} `json:"repository"`
 }
 
+// ghMaxPages bounds one poll; the notifications endpoint is paged by 50.
+const ghMaxPages = 10
+
 // Poll asks for notifications updated since the cursor, sending the last
-// ETag. A 304 returns no events and the cursors it was given.
+// ETag with the first page. A 304 returns no events and the cursors it was
+// given. Pages are read until a short one, at most ghMaxPages.
 func (g *githubSource) Poll(ctx context.Context, cursors map[string]string, mutes []domain.FeedMute) ([]domain.FeedEvent, map[string]string, error) {
-	q := url.Values{}
-	q.Set("per_page", strconv.Itoa(ghPerPage))
-	if since := cursors[ghSinceCursor]; since != "" {
-		q.Set("since", since)
-	}
-	args := []string{"api", "--include", "--method", "GET"}
-	if etag := cursors[ghETagCursor]; etag != "" {
-		args = append(args, "-H", "If-None-Match: "+etag)
-	}
-	args = append(args, "notifications?"+q.Encode())
-
-	out, runErr := g.gh(ctx, args...)
-	status, headers, body, ok := splitInclude(out)
-	switch {
-	case ok && status == 304:
-		return nil, maps.Clone(cursors), nil
-	case runErr != nil:
-		if ok {
-			return nil, nil, fmt.Errorf("gh api notifications: HTTP %d: %w", status, runErr)
-		}
-		return nil, nil, fmt.Errorf("gh api notifications: %w", runErr)
-	case ok && (status < 200 || status > 299):
-		return nil, nil, fmt.Errorf("gh api notifications: HTTP %d", status)
-	case !ok:
-		body = out
-	}
-
-	var ns []ghNotification
-	if err := json.Unmarshal(body, &ns); err != nil {
-		return nil, nil, fmt.Errorf("gh api notifications: decode: %w", err)
-	}
 	next := maps.Clone(cursors)
 	if next == nil {
 		next = map[string]string{}
 	}
-	if etag := headers.Get("Etag"); etag != "" {
-		next[ghETagCursor] = etag
-	}
 	since := cursors[ghSinceCursor]
 	var evs []domain.FeedEvent
-	for _, n := range ns {
-		if n.UpdatedAt > since {
-			since = n.UpdatedAt
+	for page := 1; page <= ghMaxPages; page++ {
+		q := url.Values{}
+		q.Set("per_page", strconv.Itoa(ghPerPage))
+		q.Set("page", strconv.Itoa(page))
+		if s := cursors[ghSinceCursor]; s != "" {
+			q.Set("since", s)
 		}
-		urgent, read := ghReasons[n.Reason]
-		if !read || n.ID == "" {
-			continue
+		args := []string{"api", "--include", "--method", "GET"}
+		if etag := cursors[ghETagCursor]; etag != "" && page == 1 {
+			args = append(args, "-H", "If-None-Match: "+etag)
 		}
-		evs = append(evs, finish(ghEvent(n, urgent), g.Name()))
+		args = append(args, "notifications?"+q.Encode())
+
+		out, runErr := g.gh(ctx, args...)
+		status, headers, body, ok := splitInclude(out)
+		switch {
+		case ok && status == 304 && page == 1:
+			return nil, maps.Clone(cursors), nil
+		case runErr != nil:
+			if ok {
+				return nil, nil, fmt.Errorf("gh api notifications: HTTP %d: %w", status, runErr)
+			}
+			return nil, nil, fmt.Errorf("gh api notifications: %w", runErr)
+		case ok && (status < 200 || status > 299):
+			return nil, nil, fmt.Errorf("gh api notifications: HTTP %d", status)
+		case !ok:
+			body = out
+		}
+		var ns []ghNotification
+		if err := json.Unmarshal(body, &ns); err != nil {
+			return nil, nil, fmt.Errorf("gh api notifications: decode: %w", err)
+		}
+		if etag := headers.Get("Etag"); etag != "" && page == 1 {
+			next[ghETagCursor] = etag
+		}
+		for _, n := range ns {
+			if n.UpdatedAt > since {
+				since = n.UpdatedAt
+			}
+			urgent, read := ghReasons[n.Reason]
+			if !read || n.ID == "" {
+				continue
+			}
+			ev := ghEvent(n, urgent)
+			g.enrich(ctx, n, &ev)
+			evs = append(evs, finish(ev, g.Name()))
+		}
+		if len(ns) < ghPerPage {
+			break
+		}
 	}
 	if since != "" {
 		next[ghSinceCursor] = since
 	}
 	return unmuted(evs, mutes), next, nil
+}
+
+const (
+	ghBodyMax  = 2048
+	ghFilesMax = 50
+)
+
+// enrich adds the PR's title, body and changed paths and sets the author as
+// actor. It is best effort: any failed read leaves the event as it is.
+func (g *githubSource) enrich(ctx context.Context, n ghNotification, ev *domain.FeedEvent) {
+	if n.Subject.Type != "PullRequest" || n.Repository.FullName == "" {
+		return
+	}
+	number, kind := ghSubjectNumber(n.Subject.URL)
+	if number <= 0 || kind != "pulls" {
+		return
+	}
+	base := fmt.Sprintf("repos/%s/pulls/%d", n.Repository.FullName, number)
+	raw, err := g.gh(ctx, "api", "--method", "GET", base)
+	if err != nil {
+		return
+	}
+	var pr struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+		User  struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	}
+	if json.Unmarshal(raw, &pr) != nil {
+		return
+	}
+	raw, err = g.gh(ctx, "api", "--method", "GET", base+"/files?per_page=50")
+	if err != nil {
+		return
+	}
+	var files []struct {
+		Filename string `json:"filename"`
+	}
+	if json.Unmarshal(raw, &files) != nil {
+		return
+	}
+	text := pr.Body
+	if len(text) > ghBodyMax {
+		text = strings.ToValidUTF8(text[:ghBodyMax], "")
+	}
+	lines := []string{"Title: " + pr.Title}
+	lines = append(lines, strings.Split(text, "\n")...)
+	if len(files) > 0 {
+		lines = append(lines, "Changed files:")
+		for i, f := range files {
+			if i >= ghFilesMax {
+				break
+			}
+			lines = append(lines, "- "+f.Filename)
+		}
+	}
+	red, _ := redact.Lines(lines, nil)
+	ev.Enrichment = strings.Join(red, "\n")
+	if login, _ := redact.Line(pr.User.Login, nil); login != "" {
+		ev.Actor = login
+	}
 }
 
 func ghEvent(n ghNotification, urgent bool) domain.FeedEvent {
