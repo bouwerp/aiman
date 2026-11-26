@@ -336,7 +336,13 @@ func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, error) {
 func (f *fakeGH) lastArgs() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return strings.Join(f.calls[len(f.calls)-1], " ")
+	// The newest notifications call: enrichment calls (P3c) may follow it.
+	for i := len(f.calls) - 1; i >= 0; i-- {
+		if joined := strings.Join(f.calls[i], " "); strings.Contains(joined, "notifications") {
+			return joined
+		}
+	}
+	return ""
 }
 
 func ghNotification(id, reason, subjectType, url, updated string) map[string]any {
