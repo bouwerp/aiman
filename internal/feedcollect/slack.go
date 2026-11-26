@@ -71,6 +71,7 @@ const (
 	slackRepliesLimit    = 200
 	slackSearchLimit     = 20
 	slackThreadKeepFor   = 14 * 24 * time.Hour
+	slackMineEvery       = 5 * time.Minute
 	slackConvCursorPfx   = "c:"
 	slackThreadCursorPfx = "t:"
 	slackSearchCursor    = "search"
@@ -110,6 +111,11 @@ type slackSource struct {
 	fullNext string    // page cursor of a full listing in progress
 	fullSeen map[string]bool
 	lastSrch time.Time // minute of the last mention search
+
+	// Per thread cursor key: when its replies were last read, and whether a
+	// history answer showed a newer latest_reply since.
+	threadRead map[string]time.Time
+	threadDue  map[string]bool
 }
 
 type budgetSlot struct {
@@ -135,6 +141,9 @@ func NewSlackSource(o SlackOptions) Source {
 		bots:    map[string]bool{},
 		convs:   map[string]*slackConv{},
 		budget:  map[string]budgetSlot{},
+
+		threadRead: map[string]time.Time{},
+		threadDue:  map[string]bool{},
 	}
 	for _, e := range o.Exclude {
 		if e = strings.TrimPrefix(strings.TrimSpace(e), "#"); e != "" {
@@ -506,6 +515,12 @@ func (s *slackSource) fromHistory(p *slackPoll, c *slackConv, m slack.Message) {
 		if m.User == s.o.Self {
 			t.mine = true
 		}
+		if tsAfter(m.LatestReply, t.latest) {
+			if t.latest != "" || tsAfter(m.LatestReply, t.last) {
+				s.threadDue[tkey] = true
+			}
+			t.latest = m.LatestReply
+		}
 		p.next[tkey] = t.String()
 	}
 	if threadTS != "" {
@@ -564,14 +579,17 @@ func (s *slackSource) searchMentions(p *slackPoll) error {
 	return nil
 }
 
-// replies reads threads whose reply count grew, newest parent first, at
-// most 10 a minute. A muted thread is not read.
+// replies reads the threads that are due, newest activity first, at most 10
+// a minute: a thread whose reply count or latest reply grew, and each of the
+// member's threads every 5 minutes. A thread with no activity for 14 days is
+// forgotten: its cursor leaves the map. A muted thread is not read.
 func (s *slackSource) replies(p *slackPoll) error {
 	type pending struct {
 		key, channel, ts string
 		t                threadCursor
 	}
-	cutoff := s.o.Now().Add(-slackThreadKeepFor)
+	now := s.o.Now()
+	cutoff := now.Add(-slackThreadKeepFor)
 	var due []pending
 	for k, v := range p.next {
 		rest, ok := strings.CutPrefix(k, slackThreadCursorPfx)
@@ -583,7 +601,15 @@ func (s *slackSource) replies(p *slackPoll) error {
 			continue
 		}
 		t := parseThreadCursor(v, ts)
-		if t.seen <= t.read || slackTime(ts).Before(cutoff) {
+		if slackTime(t.activity()).Before(cutoff) {
+			delete(p.next, k)
+			delete(s.threadRead, k)
+			delete(s.threadDue, k)
+			continue
+		}
+		grew := t.seen > t.read || s.threadDue[k]
+		stale := t.mine && now.Sub(s.threadRead[k]) >= slackMineEvery
+		if !grew && !stale {
 			continue
 		}
 		c := s.convs[ch]
@@ -593,12 +619,15 @@ func (s *slackSource) replies(p *slackPoll) error {
 		due = append(due, pending{key: k, channel: ch, ts: ts, t: t})
 	}
 	slices.SortFunc(due, func(a, b pending) int {
+		if c := tsCompare(b.t.activity(), a.t.activity()); c != 0 {
+			return c
+		}
 		if c := tsCompare(b.ts, a.ts); c != 0 {
 			return c
 		}
 		return strings.Compare(a.channel, b.channel)
 	})
-	minute := s.o.Now().Truncate(time.Minute)
+	minute := now.Truncate(time.Minute)
 	for _, d := range due {
 		if slot := s.budget["replies-threads"]; slot.minute.Equal(minute) && slot.n >= slackRepliesPerMin {
 			return nil
@@ -607,6 +636,8 @@ func (s *slackSource) replies(p *slackPoll) error {
 		if err != nil || !ok {
 			return err
 		}
+		s.threadRead[d.key] = s.o.Now()
+		delete(s.threadDue, d.key)
 		slot := s.budget["replies-threads"]
 		if !slot.minute.Equal(minute) {
 			slot = budgetSlot{minute: minute}
@@ -628,8 +659,7 @@ func (s *slackSource) thread(p *slackPoll, c *slackConv, key string, t threadCur
 			return err
 		})
 		if gone(err) {
-			t.read = t.seen
-			p.next[key] = t.String()
+			delete(p.next, key) // the thread cannot be read again
 			return true, nil
 		}
 		if err != nil || !ok {

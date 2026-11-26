@@ -243,25 +243,30 @@ func (c convCursor) String() string {
 }
 
 // threadCursor is a thread's cursor: the reply count a history answer
-// showed, the count when it was last read, the newest reply read and whether
-// the member is in it.
+// showed, the count when it was last read, the newest reply read, whether
+// the member is in it and the newest latest_reply a history answer showed.
+// The stored form is "seen read last mine [latest]".
 type threadCursor struct {
 	parent     string
 	seen, read int
 	last       string
 	mine       bool
+	latest     string
 }
 
 func parseThreadCursor(v, parent string) threadCursor {
 	t := threadCursor{parent: parent, last: parent}
 	f := strings.Fields(v)
-	if len(f) != 4 {
+	if len(f) != 4 && len(f) != 5 {
 		return t
 	}
 	t.seen, _ = strconv.Atoi(f[0])
 	t.read, _ = strconv.Atoi(f[1])
 	t.last = f[2]
 	t.mine = f[3] == "1"
+	if len(f) == 5 {
+		t.latest = f[4]
+	}
 	return t
 }
 
@@ -270,5 +275,21 @@ func (t threadCursor) String() string {
 	if t.mine {
 		mine = "1"
 	}
-	return fmt.Sprintf("%d %d %s %s", t.seen, t.read, t.last, mine)
+	out := fmt.Sprintf("%d %d %s %s", t.seen, t.read, t.last, mine)
+	if t.latest != "" {
+		out += " " + t.latest
+	}
+	return out
+}
+
+// activity is the thread's newest known message: parent, reply read or
+// latest_reply shown.
+func (t threadCursor) activity() string {
+	a := t.parent
+	for _, ts := range []string{t.last, t.latest} {
+		if tsAfter(ts, a) {
+			a = ts
+		}
+	}
+	return a
 }

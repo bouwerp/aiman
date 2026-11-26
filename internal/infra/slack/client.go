@@ -62,6 +62,7 @@ type Message struct {
 	TS          string            `json:"ts"`
 	Thread      string            `json:"thread_ts,omitempty"`
 	ReplyCount  int               `json:"reply_count,omitempty"`
+	LatestReply string            `json:"latest_reply,omitempty"`
 	Reactions   []Reaction        `json:"reactions,omitempty"`
 	Files       []MessageFile     `json:"files,omitempty"`
 	Attachments []json.RawMessage `json:"attachments,omitempty"`

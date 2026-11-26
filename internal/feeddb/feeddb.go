@@ -124,10 +124,11 @@ func OpenWriter(path string) (*Writer, error) {
 // Close closes the handle.
 func (w *Writer) Close() error { return w.db.Close() }
 
-// Append inserts the events that are new by (source, external_id) and sets the
-// cursors, in one transaction. It returns the events stored, with ids. An event
-// with an empty ExternalID fails the call and writes nothing.
-func (w *Writer) Append(ctx context.Context, events []domain.FeedEvent, cursors map[CursorKey]string) ([]domain.FeedEvent, error) {
+// Append inserts the events that are new by (source, external_id), sets the
+// cursors and deletes the drop cursors, in one transaction. It returns the
+// events stored, with ids. An event with an empty ExternalID fails the call and
+// writes nothing.
+func (w *Writer) Append(ctx context.Context, events []domain.FeedEvent, cursors map[CursorKey]string, drop ...CursorKey) ([]domain.FeedEvent, error) {
 	for _, ev := range events {
 		if ev.ExternalID == "" {
 			return nil, errors.New("feed event has an empty external id")
@@ -169,10 +170,43 @@ func (w *Writer) Append(ctx context.Context, events []domain.FeedEvent, cursors 
 			return nil, err
 		}
 	}
+	if err := deleteCursors(ctx, tx, drop); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return stored, nil
+}
+
+// DeleteCursors removes one source's cursors by key, in one transaction. A key
+// that is not stored is no error.
+func (w *Writer) DeleteCursors(ctx context.Context, source domain.FeedSource, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	drop := make([]CursorKey, 0, len(keys))
+	for _, k := range keys {
+		drop = append(drop, CursorKey{Source: source, Key: k})
+	}
+	if err := deleteCursors(ctx, tx, drop); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func deleteCursors(ctx context.Context, tx *sql.Tx, keys []CursorKey) error {
+	for _, k := range keys {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM cursors WHERE source = ? AND key = ?`, string(k.Source), k.Key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func boolInt(b bool) int {
