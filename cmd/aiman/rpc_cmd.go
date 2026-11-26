@@ -58,6 +58,7 @@ var rpcMethods = map[string]bool{
 	"harness.logs":          true,
 	"harness.capture":       true,
 	"harness.aws_calls":     true,
+	"session.events_since":  true,
 	"harness.check":         true,
 	"harness.up":            true,
 	"harness.down":          true,
