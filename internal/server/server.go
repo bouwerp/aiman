@@ -506,7 +506,7 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchContext(ctx, req)
 	case "usage.get", "limits.get":
 		return s.dispatchUsage(ctx, req)
-	case "feed.status", "feed.actions", "feed.events", "feed.memory", "feed.act":
+	case "feed.status", "feed.actions", "feed.batches", "feed.events", "feed.memory", "feed.act":
 		return s.dispatchFeed(ctx, req)
 	case "overview.run", "overview.get", "overview.list":
 		return s.dispatchOverview(ctx, req)

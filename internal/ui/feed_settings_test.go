@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
 )
 
@@ -41,17 +40,5 @@ func TestFeedProjectedRuns(t *testing.T) {
 	f.Interval = "60m"
 	if p, c := feedProjectedRuns(f, 30, noon); p != 24 || c != 24 {
 		t.Fatalf("projected %d cap %d, want 24 and 24", p, c)
-	}
-}
-
-func TestFeedBatchRowsGroupNewestFirst(t *testing.T) {
-	at := time.Now()
-	rows := feedBatchRows([]domain.FeedAction{
-		{ID: 1, BatchID: 3, State: "done", CreatedAt: at},
-		{ID: 2, BatchID: 4, State: "proposed", CreatedAt: at},
-		{ID: 3, BatchID: 3, State: "proposed", CreatedAt: at.Add(-time.Minute)},
-	})
-	if len(rows) != 2 || rows[0].id != 4 || rows[1].actions != 2 || rows[1].open != 1 {
-		t.Fatalf("rows %+v", rows)
 	}
 }

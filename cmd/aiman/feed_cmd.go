@@ -15,6 +15,7 @@ import (
 
 const feedUsage = `Usage: aiman feed status [--json]
        aiman feed actions [--state a,b] [--limit N] [--json]
+       aiman feed batches [--limit N] [--before ID] [--json]
        aiman feed events [--batch N] [--digest] [--limit N] [--json]
        aiman feed memory [--json]
        aiman feed act <id> approve [--option N] [--text T]
@@ -110,6 +111,20 @@ func runFeed(args []string, out io.Writer) error {
 		}
 		if ok {
 			params["limit"] = n
+		}
+	case "batches":
+		if len(rest) != 0 {
+			return feedUsageErr("")
+		}
+		method = "feed.batches"
+		for _, name := range []string{"limit", "before"} {
+			n, ok, err := intFlag(name)
+			if err != nil {
+				return feedUsageErr(err.Error())
+			}
+			if ok {
+				params[name] = n
+			}
 		}
 	case "events":
 		if len(rest) != 0 {
@@ -265,6 +280,27 @@ func printFeed(out io.Writer, sub string, res any) error {
 		if len(r.Actions) == 0 {
 			fmt.Fprintln(out, "no actions")
 		}
+	case "batches":
+		var r struct {
+			Batches []struct {
+				domain.FeedBatch
+				Actions int `json:"actions"`
+			} `json:"batches"`
+			NextBefore int64 `json:"next_before"`
+		}
+		if err := decodeInto(res, &r); err != nil {
+			return err
+		}
+		for _, b := range r.Batches {
+			fmt.Fprintf(out, "%d  %s  %d attempts  %s  %d events  %d actions  %s\n", b.ID, b.State, b.Attempts,
+				b.StartedAt.Local().Format("2006-01-02 15:04"), len(b.EventIDs), b.Actions, firstFeedLine(b.Summary))
+		}
+		if len(r.Batches) == 0 {
+			fmt.Fprintln(out, "no batches")
+		}
+		if r.NextBefore > 0 {
+			fmt.Fprintf(out, "more: --before %d\n", r.NextBefore)
+		}
 	case "act":
 		var r struct {
 			Action *domain.FeedAction `json:"action"`
@@ -313,4 +349,10 @@ func feedActionSource(a domain.FeedAction) string {
 		}
 	}
 	return "-"
+}
+
+// firstFeedLine is the first line of s.
+func firstFeedLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }

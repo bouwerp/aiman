@@ -23,7 +23,7 @@ var (
 		"repo.list", "host.stats", "host.version", "host.daemons", "resources.get",
 		"aws.status", "aws.login_status", "aws.log",
 		"harness.list", "harness.status", "harness.result", "harness.image_status",
-		"feed.status", "feed.actions", "feed.events", "feed.memory",
+		"feed.status", "feed.actions", "feed.batches", "feed.events", "feed.memory",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
 	// todo.mirror is left out: it stands for the agent's own task list, which

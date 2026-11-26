@@ -479,3 +479,46 @@ func (r *Repository) FeedDigests(ctx context.Context, ids []int64) ([]domain.Fee
 	}
 	return out, rows.Err()
 }
+
+// FeedBatchPage is one batch with the number of actions it produced.
+type FeedBatchPage struct {
+	domain.FeedBatch
+	Actions int `json:"actions"`
+}
+
+// FeedBatchesPage lists batches newest first, those with an id below before
+// when it is positive, with each batch's action count from one query.
+func (r *Repository) FeedBatchesPage(ctx context.Context, limit int, before int64) ([]FeedBatchPage, error) {
+	q := `SELECT b.id, b.event_ids, b.up_to_event_id, b.state, b.attempts, b.agent, b.model, b.summary, b.error, b.started_at, b.ended_at,
+		(SELECT COUNT(*) FROM feed_actions a WHERE a.batch_id = b.id)
+		FROM feed_batches b`
+	var args []any
+	if before > 0 {
+		q += ` WHERE b.id < ?`
+		args = append(args, before)
+	}
+	q += ` ORDER BY b.id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := r.rd.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FeedBatchPage
+	for rows.Next() {
+		var p FeedBatchPage
+		var ids, state string
+		var started, ended int64
+		b := &p.FeedBatch
+		if err := rows.Scan(&b.ID, &ids, &b.UpToEventID, &state, &b.Attempts, &b.Agent, &b.Model, &b.Summary, &b.Error, &started, &ended, &p.Actions); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(ids), &b.EventIDs); err != nil {
+			return nil, err
+		}
+		b.State = domain.FeedBatchState(state)
+		b.StartedAt, b.EndedAt = feedTime(started), feedTime(ended)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

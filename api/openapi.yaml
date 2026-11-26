@@ -788,6 +788,7 @@ components:
             - overview.list
             - feed.status
             - feed.actions
+            - feed.batches
             - feed.events
             - feed.memory
             - feed.act
@@ -1511,6 +1512,28 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FeedAction"
+    FeedBatchesResult:
+      type: object
+      description: >
+        feed.batches {limit?, before?}; newest first. limit defaults to 20 and
+        is clamped to 200; before is a batch id. next_before is the last id
+        returned when the page is full, else 0.
+      required: [type, batches, next_before]
+      properties:
+        type:
+          type: string
+          const: feed_batches
+        batches:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/FeedBatch"
+              - type: object
+                properties:
+                  actions:
+                    type: integer
+                    description: Actions the batch produced.
+        next_before: {type: integer, format: int64}
     FeedActionResult:
       type: object
       description: feed.act approve and dismiss (piece P8).
