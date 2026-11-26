@@ -227,8 +227,8 @@ flowchart LR
 - **K4**: role classes, never colours. One `<marker>` per arrow colour, `currentColor` fill.
 - **K5**: Mermaid takes hex only; kit reads tokens, re-renders on theme/mode change, one render at a time.
 - Diagrams fit the page width; click to enlarge. No sideways scroll.
-- Kit files are copied into each version (about 17 KiB); old versions never change.
-- Fonts: PoC uses Google Fonts; build self-hosts OFL woff2 and drops those CSP hosts.
+- Kit files (`kit/theme.css`, `kit/kit.js`, about 360 KB) are copied into each version; old versions never change.
+- Fonts: 13 OFL woff2 faces inlined in `theme.css` as `data:` URIs. A sandboxed page (origin `null`) cannot load same-host font files: fonts are fetched under CORS without the Access cookie. CSP `font-src 'self' data:`.
 
 ### Security
 
