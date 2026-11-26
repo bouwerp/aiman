@@ -451,3 +451,8 @@ These names and rules are part of the contract. The acceptance tests use them.
 - `Reader.Thread` treats `beforeID` 0 or less as no upper bound.
 - `ListFeedActions` with no states returns every state.
 - `(*sqlite.Repository).LastEventRowID(ctx) (int64, error)` answers the newest ledger rowid (used for `after_rowid: -1`).
+
+**Ownership moved at P7 start**
+
+- P7 adds `internal/infra/config/feed.go` (spec §10, §12 accessors) and `domain.NotifyFeedAction`, because the manager needs both. P10 keeps the settings page and `applyFeedSetting`; P11 keeps `pushKinds` and the push data.
+- `feed.act` lands in P7 with `forget_memory` and `unmute`; P8 adds `approve` and `dismiss`.
