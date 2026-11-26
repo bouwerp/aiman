@@ -757,6 +757,7 @@ components:
             - session.register
             - session.report_agent_session
             - notify.since
+            - session.events_since
             - verify.start
             - verify.status
             - ci.get

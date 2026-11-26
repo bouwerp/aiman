@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -148,4 +149,66 @@ func (r *Repository) querySessionEvents(ctx context.Context, query string, args 
 func payloadHash(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+// LedgerRow is a ledger event with the rowid that orders the whole table.
+// Per-session seq cannot order events across sessions; the rowid can.
+type LedgerRow struct {
+	RowID int64
+	domain.SessionEvent
+}
+
+// ListEventsAfterRowID returns events with rowid above afterRowID across all
+// sessions, oldest first, optionally limited to kinds. A limit <= 0 uses
+// defaultSessionEventLimit.
+func (r *Repository) ListEventsAfterRowID(ctx context.Context, afterRowID int64, kinds []domain.EventKind, limit int) ([]LedgerRow, error) {
+	if limit <= 0 {
+		limit = defaultSessionEventLimit
+	}
+	query := `SELECT rowid, session_id, seq, at, actor, kind, payload, hash
+		FROM session_events WHERE rowid > ?`
+	args := []any{afterRowID}
+	if len(kinds) > 0 {
+		marks := make([]string, len(kinds))
+		for i, k := range kinds {
+			marks[i] = "?"
+			args = append(args, string(k))
+		}
+		query += " AND kind IN (" + strings.Join(marks, ",") + ")"
+	}
+	query += " ORDER BY rowid ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := r.rd.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing ledger rows: %w", err)
+	}
+	defer rows.Close()
+	var out []LedgerRow
+	for rows.Next() {
+		var row LedgerRow
+		var at time.Time
+		var actor, kind, payload, hash string
+		if err := rows.Scan(&row.RowID, &row.SessionID, &row.Seq, &at, &actor, &kind, &payload, &hash); err != nil {
+			return nil, fmt.Errorf("scanning ledger row: %w", err)
+		}
+		row.At = at.UTC()
+		row.Actor = domain.EventActor(actor)
+		row.Kind = domain.EventKind(kind)
+		row.Payload = json.RawMessage(payload)
+		row.Hash = hash
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing ledger rows: %w", err)
+	}
+	return out, nil
+}
+
+// LastEventRowID is the newest ledger rowid, 0 when the ledger is empty.
+func (r *Repository) LastEventRowID(ctx context.Context) (int64, error) {
+	var last int64
+	if err := r.rd.QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid), 0) FROM session_events`).Scan(&last); err != nil {
+		return 0, fmt.Errorf("reading last ledger rowid: %w", err)
+	}
+	return last, nil
 }

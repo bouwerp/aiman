@@ -492,6 +492,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleReportAgentSession(ctx, req)
 	case "notify.since":
 		return s.handleNotifySince(ctx, req)
+	case "session.events_since":
+		return s.handleEventsSince(ctx, req)
 	case "verify.start":
 		return s.handleVerifyStart(ctx, req)
 	case "verify.status":
