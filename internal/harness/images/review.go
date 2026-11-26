@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agentjob"
 	"github.com/bouwerp/aiman/internal/coordinator"
 	"github.com/bouwerp/aiman/internal/infra/agent"
 	"github.com/bouwerp/aiman/internal/infra/config"
@@ -204,7 +205,6 @@ func ReviewReportPath(dir, digest string) string {
 // pick is the chosen agent, its binary and its credentials.
 type pick struct {
 	entry       config.PreferredAgent
-	spec        reviewAgent
 	bin         string
 	cred        Credential
 	independent bool
@@ -228,8 +228,7 @@ func (m *ModelReviewer) pickAgent(ctx context.Context, rec Record) (pick, error)
 			return p != nil
 		}
 		ready[command] = nil
-		spec, ok := reviewAgents[command]
-		if !ok {
+		if !agentjob.Supported(command) {
 			reasons = append(reasons, command+": the review container cannot run it")
 			return false
 		}
@@ -237,7 +236,7 @@ func (m *ModelReviewer) pickAgent(ctx context.Context, rec Record) (pick, error)
 		if err == nil {
 			bin, err = filepath.EvalSymlinks(bin)
 		}
-		if err == nil && !isELFFile(bin) {
+		if err == nil && !agentjob.IsELF(bin) {
 			err = errors.New("not a native binary")
 		}
 		if err != nil {
@@ -249,7 +248,7 @@ func (m *ModelReviewer) pickAgent(ctx context.Context, rec Record) (pick, error)
 			reasons = append(reasons, fmt.Sprintf("%s: %v", command, err))
 			return false
 		}
-		ready[command] = &pick{spec: spec, bin: bin, cred: cred}
+		ready[command] = &pick{bin: bin, cred: cred}
 		return true
 	}
 	entry, err := coordinator.PickConsult(m.o.Smart(), avoidAgent, avoidModel, usable)
@@ -268,17 +267,6 @@ func (m *ModelReviewer) pickAgent(ctx context.Context, rec Record) (pick, error)
 		p.independent = avoid != "" && got != "" && avoid != got
 	}
 	return p, nil
-}
-
-func isELFFile(p string) bool {
-	f, err := os.Open(p) //nolint:gosec // G304: an agent binary LookPath found
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	var magic [4]byte
-	_, err = f.Read(magic[:])
-	return err == nil && string(magic[:]) == "\x7fELF"
 }
 
 // Review builds the bundle, runs the review container (once more with a
@@ -356,7 +344,7 @@ func (m *ModelReviewer) keep(rec Record, p pick, info BundleInfo, outs []string,
 	if !p.independent {
 		fmt.Fprintf(&b, " (no smart-tier agent of another model family than %s was available)", orNone(p.avoid))
 	}
-	fmt.Fprintf(&b, "\n- Credentials: %s\n- Egress: %s\n", p.cred.Mode, strings.Join(p.spec.hosts(p.cred.Mode), ", "))
+	fmt.Fprintf(&b, "\n- Credentials: %s\n- Egress: %s\n", p.cred.Mode, strings.Join(agentjob.Egress(p.entry.Agent, p.cred), ", "))
 	fmt.Fprintf(&b, "- Bundle: %d entries, %d scripts, %d ELF files, truncated %v\n", info.Entries, info.Scripts, info.ELFs, info.Truncated)
 	fmt.Fprintf(&b, "- Verdict: %s\n", verdictText(verdict))
 	if failure != nil {
