@@ -115,3 +115,44 @@ jobs:
       # before a release builds the asset.
       - name: Build and check
         run: build/bun-dap/check.sh dist
+
+  artifact-kit:
+    name: Artifact kit and Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: e2e/console/package-lock.json
+
+      # The kit test imports playwright from the repository root; it skips
+      # when playwright cannot be resolved, so the check below fails instead.
+      - name: Install Playwright Chromium
+        run: |
+          npm ci --prefix e2e/console
+          (cd e2e/console && npx playwright install --with-deps chromium)
+          ln -s e2e/console/node_modules node_modules
+          node -e "import('playwright').then(() => console.log('playwright resolves'))"
+
+      - name: Check font sums
+        working-directory: internal/artifact/kit/fonts
+        run: |
+          sed -n 's/^| `@fontsource[^|]*|[^|]*| `\([^`]*\)` | `\([0-9a-f]\{64\}\)` |$/\2  \1/p' SOURCES.md > /tmp/fonts.sha256
+          test "$(wc -l < /tmp/fonts.sha256)" -eq "$(ls *.woff2 | wc -l)"
+          sha256sum -c /tmp/fonts.sha256
+          ./font-face.sh --check
+
+      - name: Worker test
+        run: node --test internal/artifact/worker/worker_test.mjs
+
+      - name: Kit test
+        shell: bash
+        run: |
+          node --test --test-reporter=tap internal/artifact/kit/kit_test.mjs | tee /tmp/kit.tap
+          grep -q '^# skipped 0$' /tmp/kit.tap
