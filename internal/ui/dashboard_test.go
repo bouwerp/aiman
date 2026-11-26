@@ -265,3 +265,26 @@ func TestNonWorktreeExistsErrorHandling(t *testing.T) {
 		t.Error("Expected lastError to be set for non-WORKTREE_EXISTS error")
 	}
 }
+
+// TestWorktreeExistsUseWithoutAgentPicksAgent covers the branch picker path:
+// the dialog opens before the agent picker, so 'u' must continue into the
+// agent picker instead of creating a session with no agent.
+func TestWorktreeExistsUseWithoutAgentPicksAgent(t *testing.T) {
+	model := NewModel(&config.Config{}, []usecase.CheckResult{}, []domain.Session{}, &mockSessionRepo{}, nil, nil, nil)
+	model.state = viewStateWorktreeExists
+	model.sessionCfg.Branch = "feature/existing"
+	model.sessionCfg.ExistingBranch = true
+
+	updatedModel, _ := model.Update(pressKey("u"))
+	m := updatedModel.(*Model)
+
+	if !m.sessionCfg.AttachExisting {
+		t.Error("expected AttachExisting to be set")
+	}
+	if len(m.creatingSessions) != 0 {
+		t.Errorf("expected no create to start without an agent, got %d", len(m.creatingSessions))
+	}
+	if m.state != viewStateLoading || m.loadingNext != viewStateAgentPicker {
+		t.Errorf("expected loading into the agent picker, got state %v next %v", m.state, m.loadingNext)
+	}
+}
