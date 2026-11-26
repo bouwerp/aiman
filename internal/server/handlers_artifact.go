@@ -290,55 +290,6 @@ func (s *Server) handleArtifactGet(ctx context.Context, req Request) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "artifact_info", "artifact": info}}
 }
 
-// handleArtifactOperator answers share, unshare and delete, which only the
-// operator may call.
-func (s *Server) handleArtifactOperator(ctx context.Context, req Request) Response {
-	if s.isSessionCall(ctx, req) {
-		return errResp(req.ID, CodeNeedsOperator, req.Method+" is the operator's")
-	}
-	if s.artifacts == nil {
-		return errResp(req.ID, CodeUnavailable, "artifact publishing is not configured on this host")
-	}
-	var p struct {
-		ID      string   `json:"id"`
-		Emails  []string `json:"emails"`
-		Domains []string `json:"domains"`
-		All     bool     `json:"all"`
-	}
-	if bad := decodeParams(req, &p); bad != nil {
-		return *bad
-	}
-	if !artifact.ValidID(p.ID) {
-		return errResp(req.ID, CodeInvalidParams, "id is required: 20 lower-case base32 characters")
-	}
-	list := artifact.ShareList{Emails: p.Emails, Domains: p.Domains}
-	switch req.Method {
-	case "artifact.delete":
-		if err := s.artifacts.Delete(ctx, p.ID); err != nil {
-			return artifactErr(req.ID, err)
-		}
-		return Response{ID: req.ID, Result: map[string]any{"type": "artifact_deleted", "id": p.ID}}
-	case "artifact.share":
-		if len(list.Emails)+len(list.Domains) == 0 {
-			return errResp(req.ID, CodeInvalidParams, "emails or domains are required")
-		}
-		m, err := s.artifacts.Share(ctx, p.ID, list, artifact.ShareList{}, false)
-		if err != nil {
-			return artifactErr(req.ID, err)
-		}
-		return Response{ID: req.ID, Result: map[string]any{"type": "artifact_share", "share": m.Share}}
-	default: // artifact.unshare
-		if !p.All && len(list.Emails)+len(list.Domains) == 0 {
-			return errResp(req.ID, CodeInvalidParams, "emails, domains or all is required")
-		}
-		m, err := s.artifacts.Share(ctx, p.ID, artifact.ShareList{}, list, p.All)
-		if err != nil {
-			return artifactErr(req.ID, err)
-		}
-		return Response{ID: req.ID, Result: map[string]any{"type": "artifact_share", "share": m.Share}}
-	}
-}
-
 // readConfinedAny reads file (relative to wd) after resolving symlinks, only
 // when it is a regular file inside the session's working directory or
 // worktree. It is readConfined without the .md rule.
