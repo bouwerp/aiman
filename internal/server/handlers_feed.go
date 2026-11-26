@@ -13,6 +13,7 @@ import (
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/feed"
 	"github.com/bouwerp/aiman/internal/feeddb"
+	"github.com/bouwerp/aiman/internal/infra/sqlite"
 )
 
 // FeedEvents is feed.db as the feed RPCs read it: the manager's reader plus
@@ -129,6 +130,8 @@ func (s *Server) dispatchFeed(ctx context.Context, req Request) Response {
 	switch req.Method {
 	case "feed.actions":
 		return handleFeedActions(ctx, req, d)
+	case "feed.batches":
+		return handleFeedBatches(ctx, req, d)
 	case "feed.events":
 		return handleFeedEvents(ctx, req, d)
 	case "feed.memory":
@@ -266,6 +269,38 @@ func handleFeedActions(ctx context.Context, req Request, d *FeedDeps) Response {
 		acts = []domain.FeedAction{}
 	}
 	return Response{ID: req.ID, Result: map[string]any{"type": "feed_actions", "actions": acts}}
+}
+
+// feedBatchPager is the store's batch history page; the repository has it.
+type feedBatchPager interface {
+	FeedBatchesPage(ctx context.Context, limit int, before int64) ([]sqlite.FeedBatchPage, error)
+}
+
+func handleFeedBatches(ctx context.Context, req Request, d *FeedDeps) Response {
+	var p struct {
+		Limit  int   `json:"limit"`
+		Before int64 `json:"before"`
+	}
+	if r := feedParams(req, &p); r != nil {
+		return *r
+	}
+	pager, ok := d.Store.(feedBatchPager)
+	if !ok {
+		return errResp(req.ID, CodeUnavailable, "the feed store has no batch history")
+	}
+	limit := clampLimit(p.Limit, 20, 200)
+	bs, err := pager.FeedBatchesPage(ctx, limit, p.Before)
+	if err != nil {
+		return feedErr(req, err)
+	}
+	if bs == nil {
+		bs = []sqlite.FeedBatchPage{}
+	}
+	var next int64
+	if len(bs) == limit {
+		next = bs[len(bs)-1].ID
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "feed_batches", "batches": bs, "next_before": next}}
 }
 
 func clampLimit(n, def, max int) int {

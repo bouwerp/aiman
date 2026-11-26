@@ -31,11 +31,14 @@ type feedPageView struct {
 	mode    int
 	actions []domain.FeedAction
 	digest  []domain.FeedEvent
-	bullets []feedMemoryBullet
-	mutes   []domain.FeedMute
-	cursor  int
-	loading bool
-	err     string
+	batches []feedBatchRow
+	// nextBefore is feed.batches' next_before: 0 when the history is at its end.
+	nextBefore int64
+	bullets    []feedMemoryBullet
+	mutes      []domain.FeedMute
+	cursor     int
+	loading    bool
+	err        string
 }
 
 // feedPageMsg answers one page read.
@@ -44,7 +47,11 @@ type feedPageMsg struct {
 	mode    int
 	actions []domain.FeedAction
 	digest  []domain.FeedEvent
-	err     error
+	batches []feedBatchRow
+	// nextBefore and more describe a feed.batches page; more appends it.
+	nextBefore int64
+	more       bool
+	err        error
 }
 
 // feedMemoryMsg is one feed.memory answer (also forget_memory and unmute).
@@ -102,6 +109,12 @@ func (m *Model) enterFeedPage() tea.Cmd {
 // feedPageReadCmd reads what the page's mode shows, waiting for a
 // foreground slot.
 func (m *Model) feedPageReadCmd(p *feedPageView) tea.Cmd {
+	return m.feedPageReadBefore(p, 0)
+}
+
+// feedPageReadBefore is feedPageReadCmd; with before set the batches mode
+// reads the next older page of the history.
+func (m *Model) feedPageReadBefore(p *feedPageView, before int64) tea.Cmd {
 	r, ok := m.feedRemote(p.host)
 	if !ok {
 		return nil
@@ -121,6 +134,24 @@ func (m *Model) feedPageReadCmd(p *feedPageView) tea.Cmd {
 			var raw json.RawMessage
 			raw, err = feedRPC(ctx, r, "feed.memory", map[string]any{})
 			return feedMemoryResult(r.Host, raw, err)
+		case feedModeBatches:
+			params := map[string]any{"limit": feedBatchPageSize}
+			if before > 0 {
+				params["before"] = before
+			}
+			var raw json.RawMessage
+			raw, err = feedRPC(ctx, r, "feed.batches", params)
+			if err != nil {
+				return feedPageMsg{host: r.Host, mode: mode, err: err}
+			}
+			var res struct {
+				Batches    []feedBatchRow `json:"batches"`
+				NextBefore int64          `json:"next_before"`
+			}
+			if uerr := json.Unmarshal(raw, &res); uerr != nil {
+				return feedPageMsg{host: r.Host, mode: mode, err: fmt.Errorf("feed.batches: %w", uerr)}
+			}
+			return feedPageMsg{host: r.Host, mode: mode, batches: res.Batches, nextBefore: res.NextBefore, more: before > 0}
 		case feedModeDigest:
 			var raw json.RawMessage
 			raw, err = feedRPC(ctx, r, "feed.events", map[string]any{"digest": true, "limit": 200})
@@ -165,6 +196,13 @@ func (m *Model) applyFeedPage(msg feedPageMsg) {
 	switch msg.mode {
 	case feedModeDigest:
 		p.digest = msg.digest
+	case feedModeBatches:
+		if msg.more {
+			p.batches = append(p.batches, msg.batches...)
+		} else {
+			p.batches = msg.batches
+		}
+		p.nextBefore = msg.nextBefore
 	default:
 		p.actions = msg.actions
 		sort.SliceStable(p.actions, func(i, j int) bool { return p.actions[i].ID > p.actions[j].ID })
@@ -194,7 +232,7 @@ func (m *Model) feedPageLen() int {
 	case feedModeDigest:
 		return len(p.digest)
 	case feedModeBatches:
-		return len(feedBatchRows(p.actions))
+		return len(p.batches)
 	case feedModeMemory:
 		return len(p.bullets) + len(p.mutes)
 	}
@@ -228,6 +266,9 @@ func (m *Model) handleFeedPageUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		if p.cursor < m.feedPageLen()-1 {
 			p.cursor++
+		} else if p.mode == feedModeBatches && p.nextBefore > 0 && !p.loading {
+			p.loading = true
+			return m, m.feedPageReadBefore(p, p.nextBefore)
 		}
 	case "k", "up":
 		if p.cursor > 0 {
@@ -249,38 +290,13 @@ func (m *Model) handleFeedPageUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// feedBatchRow is one batch as the page lists it.
-type feedBatchRow struct {
-	id      int64
-	actions int
-	open    int
-	first   time.Time
-}
+// feedBatchPageSize is how many batches one feed.batches read asks for.
+const feedBatchPageSize = 50
 
-// feedBatchRows groups the page's actions by batch, newest first. serve has
-// no batch listing, so the history is the batches that proposed actions.
-func feedBatchRows(actions []domain.FeedAction) []feedBatchRow {
-	byID := map[int64]*feedBatchRow{}
-	for _, a := range actions {
-		r := byID[a.BatchID]
-		if r == nil {
-			r = &feedBatchRow{id: a.BatchID, first: a.CreatedAt}
-			byID[a.BatchID] = r
-		}
-		r.actions++
-		if a.State == "proposed" || a.State == "snoozed" {
-			r.open++
-		}
-		if a.CreatedAt.Before(r.first) {
-			r.first = a.CreatedAt
-		}
-	}
-	out := make([]feedBatchRow, 0, len(byID))
-	for _, r := range byID {
-		out = append(out, *r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].id > out[j].id })
-	return out
+// feedBatchRow is one feed.batches entry: the batch and its action count.
+type feedBatchRow struct {
+	domain.FeedBatch
+	Actions int `json:"actions"`
 }
 
 func (m *Model) renderFeedPage() string {
@@ -373,7 +389,7 @@ func (m *Model) feedPageLines(p *feedPageView, width int) []string {
 			lines = append(lines, truncatePlain(line, width))
 		}
 	case feedModeBatches:
-		rows := feedBatchRows(p.actions)
+		rows := p.batches
 		if st := m.feed[p.host]; st != nil && st.status.LastBatch != nil {
 			b := st.status.LastBatch
 			lb := fmt.Sprintf("newest batch %d · %s · %d attempts · %d events", b.ID, b.State, b.Attempts, len(b.EventIDs))
@@ -387,11 +403,17 @@ func (m *Model) feedPageLines(p *feedPageView, width int) []string {
 			lines = append(lines, "")
 		}
 		if len(rows) == 0 && !p.loading {
-			lines = append(lines, dim.Render("No batch has proposed an action yet."))
+			lines = append(lines, dim.Render("No batch has been cut yet."))
 		}
 		for i, r := range rows {
-			line := fmt.Sprintf("%sbatch %-5d %s  %d actions, %d open", cur(i), r.id, overviewTime(r.first), r.actions, r.open)
-			lines = append(lines, line)
+			line := fmt.Sprintf("%sbatch %-5d %-8s %s  %d attempts, %d events, %d actions", cur(i), r.ID, r.State, overviewTime(r.StartedAt), r.Attempts, len(r.EventIDs), r.Actions)
+			lines = append(lines, truncatePlain(line, width))
+			if r.Summary != "" {
+				lines = append(lines, dim.Render(truncatePlain("      "+firstLineOf(r.Summary), width)))
+			}
+		}
+		if p.nextBefore > 0 {
+			lines = append(lines, dim.Render("  j past the end loads older batches"))
 		}
 	case feedModeMemory:
 		lines = append(lines, lipgloss.NewStyle().Bold(true).Render("Memory"))

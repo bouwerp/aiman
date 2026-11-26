@@ -53,6 +53,7 @@ var rpcMethods = map[string]bool{
 	"overview.run":        true,
 	"feed.status":         true,
 	"feed.actions":        true,
+	"feed.batches":        true,
 	"feed.events":         true,
 	"feed.memory":         true,
 	"feed.act":            true,
