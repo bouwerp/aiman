@@ -74,8 +74,8 @@ func (c *CFObjects) do(ctx context.Context, method, u string, body []byte, conte
 	return resp, nil
 }
 
-// cfEnvelope is the REST API's JSON answer.
-type cfEnvelope struct {
+// restEnvelope is the REST API's JSON answer.
+type restEnvelope struct {
 	Success bool `json:"success"`
 	Errors  []struct {
 		Code    int    `json:"code"`
@@ -87,7 +87,7 @@ type cfEnvelope struct {
 // message.
 func cfStatusErr(resp *http.Response, method, key string) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	var env cfEnvelope
+	var env restEnvelope
 	_ = json.Unmarshal(body, &env)
 	if resp.StatusCode == http.StatusNotFound || (len(env.Errors) > 0 && env.Errors[0].Code == cfMissingKey) {
 		return fmt.Errorf("%w: %s", ErrNotFound, key)
@@ -166,7 +166,7 @@ func (c *CFObjects) Put(ctx context.Context, key string, data []byte, contentTyp
 		return "", cfStatusErr(resp, http.MethodPut, key)
 	}
 	var out struct {
-		cfEnvelope
+		restEnvelope
 		Result struct {
 			ETag string `json:"etag"`
 		} `json:"result"`
@@ -221,7 +221,7 @@ func (c *CFObjects) List(ctx context.Context, prefix string) ([]string, error) {
 			return nil, err
 		}
 		var page struct {
-			cfEnvelope
+			restEnvelope
 			Result []struct {
 				Key string `json:"key"`
 			} `json:"result"`
