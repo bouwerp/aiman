@@ -61,6 +61,8 @@ type Config struct {
 	Resources ResourcesConfig `yaml:"resources,omitempty"`
 	// Harness configures scenario runs for human testers.
 	Harness HarnessConfig `yaml:"harness,omitempty"`
+	// Feed configures serve's event feed.
+	Feed FeedConfig `yaml:"feed,omitempty"`
 	// Slack configures the aiman slack CLI on this machine.
 	Slack        SlackConfig `yaml:"slack,omitempty"`
 	Remotes      []Remote    `yaml:"remotes"`
@@ -118,6 +120,8 @@ type ServeConfig struct {
 	Resources ResourcesConfig `yaml:"resources,omitempty"`
 	// Harness configures scenario runs for human testers.
 	Harness HarnessConfig `yaml:"harness,omitempty"`
+	// Feed configures serve's event feed.
+	Feed FeedConfig `yaml:"feed,omitempty"`
 }
 
 // SlackConfig configures the aiman slack CLI.
@@ -553,6 +557,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Host:          c.Host,
 		Resources:     c.Resources,
 		Harness:       c.Harness,
+		Feed:          c.Feed,
 	})
 }
 

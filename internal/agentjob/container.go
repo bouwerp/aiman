@@ -66,6 +66,24 @@ type Container struct {
 	Allow    []string
 	AimanBin string
 	Timeout  time.Duration
+	// Label marks the containers and the network; empty is the Label const.
+	Label string
+	// What names the job in errors and step texts; empty is "review".
+	What string
+}
+
+func (c Container) label() string {
+	if c.Label != "" {
+		return c.Label
+	}
+	return Label
+}
+
+func (c Container) what() string {
+	if c.What != "" {
+		return c.What
+	}
+	return "review"
 }
 
 // Runner runs an agent container and returns the agent's stdout.
@@ -135,7 +153,7 @@ func hardening(uid, gid int, memory, cpus string, pids int) []string {
 
 // Args are the docker run arguments of the agent container.
 func Args(c Container) []string {
-	args := []string{"run", "--rm", "-i", "--name", c.Name, "--network", c.Name, "--label", Label}
+	args := []string{"run", "--rm", "-i", "--name", c.Name, "--network", c.Name, "--label", c.label()}
 	args = append(args, hardening(c.UID, c.GID, Memory, CPUs, PIDs)...)
 	args = append(args, "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
 		"--tmpfs", fmt.Sprintf("%s:rw,nosuid,nodev,size=256m,uid=%d,gid=%d,mode=0700", home, c.UID, c.GID))
@@ -155,7 +173,7 @@ func Args(c Container) []string {
 // ProxyArgs are the docker run arguments of the allowlist proxy: the aiman
 // binary read-only, on the internal network only until it listens.
 func ProxyArgs(c Container) []string {
-	args := []string{"run", "-d", "--name", c.Name + "-proxy", "--network", c.Name, "--network-alias", "proxy", "--label", Label}
+	args := []string{"run", "-d", "--name", c.Name + "-proxy", "--network", c.Name, "--network-alias", "proxy", "--label", c.label()}
 	args = append(args, hardening(c.UID, c.GID, proxyMemory, "0.5", proxyPIDs)...)
 	args = append(args, "--mount", "type=bind,source="+c.AimanBin+",target="+ContainerAiman+",readonly",
 		"--entrypoint", ContainerAiman, c.Image, "harness", "review-proxy", "--listen", fmt.Sprintf("auto:%d", ProxyPort))
@@ -171,9 +189,10 @@ func ProxyArgs(c Container) []string {
 // all three whatever happens.
 func (r DockerRunner) Run(ctx context.Context, c Container) (string, error) {
 	if len(c.Entrypoint) == 0 || c.AimanBin == "" || len(c.Allow) == 0 {
-		return "", errors.New("review container: entrypoint, aiman binary and allowlist are required")
+		return "", errors.New(c.what() + " container: entrypoint, aiman binary and allowlist are required")
 	}
 	d := r.docker()
+	what := c.what()
 	proxy := c.Name + "-proxy"
 	cleanup := func() {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -183,16 +202,16 @@ func (r DockerRunner) Run(ctx context.Context, c Container) (string, error) {
 	}
 	cleanup()
 	defer cleanup()
-	if err := r.must(ctx, "create the review network", "network", "create", "--internal", "--label", Label, c.Name); err != nil {
+	if err := r.must(ctx, "create the "+what+" network", "network", "create", "--internal", "--label", c.label(), c.Name); err != nil {
 		return "", err
 	}
-	if err := r.must(ctx, "start the review proxy", ProxyArgs(c)...); err != nil {
+	if err := r.must(ctx, "start the "+what+" proxy", ProxyArgs(c)...); err != nil {
 		return "", err
 	}
-	if err := r.waitProxy(ctx, proxy); err != nil {
+	if err := r.waitProxy(ctx, what, proxy); err != nil {
 		return "", err
 	}
-	if err := r.must(ctx, "connect the review proxy", "network", "connect", "bridge", proxy); err != nil {
+	if err := r.must(ctx, "connect the "+what+" proxy", "network", "connect", "bridge", proxy); err != nil {
 		return "", err
 	}
 	timeout := c.Timeout
@@ -204,11 +223,11 @@ func (r DockerRunner) Run(ctx context.Context, c Container) (string, error) {
 	out, errOut, code, err := d(rctx, Args(c), c.Stdin)
 	switch {
 	case rctx.Err() != nil:
-		return out, fmt.Errorf("the review ran out of time (%s)", timeout)
+		return out, fmt.Errorf("the %s ran out of time (%s)", what, timeout)
 	case err != nil:
-		return out, fmt.Errorf("run the review container: %w", err)
+		return out, fmt.Errorf("run the %s container: %w", what, err)
 	case code != 0:
-		return out, fmt.Errorf("the review agent exited %d: %s", code, printable(truncate(lastLines(errOut), 400)))
+		return out, fmt.Errorf("the %s agent exited %d: %s", what, code, printable(truncate(lastLines(errOut), 400)))
 	}
 	return out, nil
 }
@@ -224,7 +243,7 @@ func (r DockerRunner) must(ctx context.Context, what string, args ...string) err
 	return nil
 }
 
-func (r DockerRunner) waitProxy(ctx context.Context, name string) error {
+func (r DockerRunner) waitProxy(ctx context.Context, what, name string) error {
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		out, errOut, _, err := r.docker()(ctx, []string{"logs", name}, "")
@@ -232,7 +251,7 @@ func (r DockerRunner) waitProxy(ctx context.Context, name string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("the review proxy did not start: %s", lastLines(errOut+out))
+			return fmt.Errorf("the %s proxy did not start: %s", what, lastLines(errOut+out))
 		}
 		select {
 		case <-ctx.Done():

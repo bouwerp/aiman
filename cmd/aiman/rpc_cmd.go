@@ -51,6 +51,11 @@ var rpcMethods = map[string]bool{
 	"overview.get":        true,
 	"overview.list":       true,
 	"overview.run":        true,
+	"feed.status":         true,
+	"feed.actions":        true,
+	"feed.events":         true,
+	"feed.memory":         true,
+	"feed.act":            true,
 	"harness.status":      true,
 	"harness.verdict":     true,
 	// The laptop's harness console calls these through the RPC stream.

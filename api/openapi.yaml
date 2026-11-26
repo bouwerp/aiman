@@ -786,6 +786,11 @@ components:
             - overview.run
             - overview.get
             - overview.list
+            - feed.status
+            - feed.actions
+            - feed.events
+            - feed.memory
+            - feed.act
             - harness.up
             - harness.check
             - harness.status
@@ -1387,6 +1392,193 @@ components:
             overview.get only: the newest run of any state (a newer failure
             is never hidden behind an older done run), without markdown and
             report, with needs_you, steps, error and times.
+    FeedStatusResult:
+      type: object
+      description: >
+        feed.status. With the feed off only type, enabled, collector (state
+        off) and settings are set. collector.state is not_started (no
+        feed.db yet), starting, ok, stale (no poll in 10 minutes) or error.
+      required: [type, enabled, collector]
+      properties:
+        type:
+          type: string
+          const: feed_status
+        enabled:
+          type: boolean
+        collector:
+          type: object
+          properties:
+            state:
+              type: string
+            error:
+              type: string
+            health:
+              type: array
+              items:
+                type: object
+                properties:
+                  source: {type: string}
+                  last_poll: {type: string, format: date-time}
+                  last_ok: {type: string, format: date-time}
+                  error: {type: string}
+                  calls: {type: integer}
+        high_water:
+          type: integer
+          format: int64
+        pending:
+          type: integer
+          description: Events above the high-water mark (counted up to 1000).
+        open_actions:
+          type: integer
+        high_actions:
+          type: integer
+        last_batch:
+          $ref: "#/components/schemas/FeedBatch"
+        batches_today:
+          type: integer
+        settings:
+          type: object
+          description: The feed config block serve read.
+    FeedBatch:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        event_ids: {type: array, items: {type: integer, format: int64}}
+        up_to_event_id: {type: integer, format: int64}
+        state: {type: string, enum: [running, done, failed]}
+        attempts: {type: integer}
+        agent: {type: string}
+        model: {type: string}
+        summary: {type: string}
+        error: {type: string}
+        started_at: {type: string, format: date-time}
+        ended_at: {type: string, format: date-time}
+    FeedAction:
+      type: object
+      description: >
+        One proposed action. options holds 1 to 4 choices; option numbers
+        are 0-based on the wire. trace is the timeline serve built.
+      properties:
+        id: {type: integer, format: int64}
+        batch_id: {type: integer, format: int64}
+        kind: {type: string}
+        rationale: {type: string}
+        priority: {type: string, enum: [high, normal, low]}
+        answers: {type: array, items: {type: integer, format: int64}}
+        options:
+          type: array
+          items:
+            type: object
+            properties:
+              label: {type: string}
+              kind: {type: string}
+              params: {type: object}
+              why: {type: string}
+        trace:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: {type: string, enum: [event, context, memory, decision, batch]}
+              ref: {type: string}
+              at: {type: string, format: date-time}
+              role: {type: string, enum: [answers, cause, context]}
+              excerpt: {type: string}
+              url: {type: string}
+        state: {type: string, enum: [proposed, approved, running, done, failed, dismissed, expired, snoozed]}
+        chosen: {type: integer}
+        chosen_params: {type: object}
+        result: {type: string}
+        decided_by: {type: string}
+        dismissal:
+          type: object
+          properties:
+            reason: {type: string}
+            note: {type: string}
+            until: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        decided_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+    FeedActionsResult:
+      type: object
+      description: feed.actions {state?, id?, limit?}; high priority first, then newest.
+      required: [type, actions]
+      properties:
+        type:
+          type: string
+          const: feed_actions
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/FeedAction"
+    FeedActionResult:
+      type: object
+      description: feed.act approve and dismiss (piece P8).
+      required: [type, action]
+      properties:
+        type:
+          type: string
+          const: feed_action
+        action:
+          $ref: "#/components/schemas/FeedAction"
+    FeedEventsResult:
+      type: object
+      description: >
+        feed.events {batch?, ids?, digest?, limit?}. Negative ids are channel
+        digests. With digest true: the newest batches' events no action
+        answered, and every event of a batch that failed twice; the agent's
+        digest line, when it wrote one, is the title.
+      required: [type, events]
+      properties:
+        type:
+          type: string
+          const: feed_events
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: integer, format: int64}
+              source: {type: string}
+              external_id: {type: string}
+              at: {type: string, format: date-time}
+              actor: {type: string}
+              actor_name: {type: string}
+              kind: {type: string}
+              title: {type: string}
+              body: {type: string}
+              url: {type: string}
+              thread_key: {type: string}
+              class: {type: string}
+              urgent: {type: boolean}
+              own: {type: boolean}
+              enrichment: {type: string}
+              channel: {type: string}
+    FeedMemoryResult:
+      type: object
+      description: feed.memory, and feed.act forget_memory and unmute.
+      required: [type, bullets, mutes]
+      properties:
+        type:
+          type: string
+          const: feed_memory
+        bullets:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: string}
+              text: {type: string}
+              at: {type: string, format: date-time}
+        mutes:
+          type: array
+          items:
+            type: object
+            properties:
+              scope: {type: string, enum: [thread, sender, channel]}
+              key: {type: string}
+              until: {type: string, format: date-time}
+              action_id: {type: integer, format: int64}
     OverviewRunsResult:
       type: object
       description: overview.list, the kept runs newest first (at most 20 finished).
@@ -3946,7 +4138,11 @@ components:
             notify and verify are published by request handlers;
             overview is published when an overview run or one of its steps
             changes, with id the run, status its state and step the step
-            that changed (a signal to read overview.get again); harness_share is published
+            that changed (a signal to read overview.get again); feed is
+            published when a feed batch or action is added or changes state,
+            with batch or action the id and state its new state (state
+            memory after a memory bullet or mute was removed), a signal to
+            read feed.actions again; harness_share is published
             when a harness share becomes live or ends, with id the share
             and state live or ended;
             session_forgotten is published when serve drops a session's row
@@ -3962,6 +4158,7 @@ components:
             - session_gone
             - session_forgotten
             - overview
+            - feed
             - harness_share
             - session_created
             - todo_changed
@@ -4010,6 +4207,14 @@ components:
         subagent:
           type: string
           description: On transcript, the sub-agent whose file moved; absent for the parent.
+        action:
+          type: integer
+          format: int64
+          description: On feed, the action that was added or changed.
+        batch:
+          type: integer
+          format: int64
+          description: On feed, the batch that was cut or changed.
         step:
           type: string
           description: On overview, the step that changed (collect, bundle, start_agent, report, cleanup); absent at create.
