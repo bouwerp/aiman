@@ -510,8 +510,15 @@ func (r ReviewConfig) FixTimeoutOrDefault() time.Duration {
 // unset.
 const DefaultDesignDir = "docs/designs"
 
-// ArtifactsConfig names where artifact pages are published. The R2 key is
-// not here: it lives on the host only, in ~/.aiman/artifacts-r2.json.
+// Artifact credential kinds for ArtifactsConfig.Auth.
+const (
+	ArtifactsAuthCFOAuth = "cf_oauth" // the cf CLI's OAuth login, R2 REST object API
+	ArtifactsAuthR2Key   = "r2_key"   // a bucket-scoped key, R2 S3 API
+)
+
+// ArtifactsConfig names where artifact pages are published. Credentials are
+// not here: they live on the host only, in ~/.aiman/artifacts-r2.json or the
+// cf CLI's config.
 type ArtifactsConfig struct {
 	// Host is the site that serves artifacts, such as aiman.fyi.
 	Host string `yaml:"host,omitempty"`
@@ -522,6 +529,10 @@ type ArtifactsConfig struct {
 	// Owners are the emails that may view every artifact. The Worker reads
 	// them; on a host they are informational.
 	Owners []string `yaml:"owners,omitempty"`
+	// Auth is ArtifactsAuthCFOAuth or ArtifactsAuthR2Key. Unset picks r2_key
+	// when the host has its R2 key file, else cf_oauth when it has the cf
+	// CLI's config.
+	Auth string `yaml:"auth,omitempty"`
 }
 
 // Configured reports whether host, account and bucket are all set.
