@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -58,6 +59,41 @@ type Publisher struct {
 	// CanWrite reports whether caller may add a version to an artifact
 	// owned by owner. Nil: only the owner.
 	CanWrite func(owner, caller string) bool
+
+	// locks serialises Publish, Share and Delete per artifact id. The REST
+	// bucket checks conditions with a read before the write, so two writes
+	// of one artifact in this process must not interleave.
+	lockMu sync.Mutex
+	locks  map[string]*idLock
+}
+
+type idLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock holds id's lock until the returned func runs.
+func (p *Publisher) lock(id string) func() {
+	p.lockMu.Lock()
+	if p.locks == nil {
+		p.locks = map[string]*idLock{}
+	}
+	l := p.locks[id]
+	if l == nil {
+		l = &idLock{}
+		p.locks[id] = l
+	}
+	l.refs++
+	p.lockMu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		p.lockMu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(p.locks, id)
+		}
+		p.lockMu.Unlock()
+	}
 }
 
 // PublishRequest is one publish: a new artifact, or a version of ID.
@@ -139,6 +175,7 @@ func (p *Publisher) Publish(ctx context.Context, r PublishRequest) (Published, e
 		if !ValidID(r.ID) {
 			return Published{}, fmt.Errorf("%w: id %q is not 20 lower-case base32 characters", ErrInvalid, r.ID)
 		}
+		defer p.lock(r.ID)()
 		rec, err = p.liveRecord(ctx, r.ID)
 		if err != nil {
 			return Published{}, err
@@ -417,6 +454,7 @@ func (p *Publisher) Share(ctx context.Context, id string, add, remove ShareList,
 	if err := add.check(); err != nil {
 		return Meta{}, err
 	}
+	defer p.lock(id)()
 	rec, err := p.liveRecord(ctx, id)
 	if err != nil {
 		return Meta{}, err
@@ -452,6 +490,7 @@ func (p *Publisher) Share(ctx context.Context, id string, add, remove ShareList,
 // Delete marks meta.json and the record deleted, then removes the version
 // files. Deleting a deleted artifact only retries the file removal.
 func (p *Publisher) Delete(ctx context.Context, id string) error {
+	defer p.lock(id)()
 	rec, err := p.Store.Get(ctx, id)
 	if err != nil {
 		return err
