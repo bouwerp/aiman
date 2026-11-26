@@ -44,6 +44,8 @@ type Config struct {
 	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
+	// Artifacts configures the artifact host and its R2 bucket.
+	Artifacts ArtifactsConfig `yaml:"artifacts,omitempty"`
 	// Review configures PR review sessions.
 	Review ReviewConfig `yaml:"review,omitempty"`
 	// CI configures serve's PR watcher.
@@ -99,6 +101,8 @@ type ServeConfig struct {
 	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
+	// Artifacts configures the artifact host and its R2 bucket.
+	Artifacts ArtifactsConfig `yaml:"artifacts,omitempty"`
 	// Review configures PR review sessions.
 	Review ReviewConfig `yaml:"review,omitempty"`
 	// CI configures serve's PR watcher.
@@ -506,6 +510,25 @@ func (r ReviewConfig) FixTimeoutOrDefault() time.Duration {
 // unset.
 const DefaultDesignDir = "docs/designs"
 
+// ArtifactsConfig names where artifact pages are published. The R2 key is
+// not here: it lives on the host only, in ~/.aiman/artifacts-r2.json.
+type ArtifactsConfig struct {
+	// Host is the site that serves artifacts, such as aiman.fyi.
+	Host string `yaml:"host,omitempty"`
+	// AccountID is the Cloudflare account holding the bucket.
+	AccountID string `yaml:"account_id,omitempty"`
+	// Bucket is the R2 bucket name.
+	Bucket string `yaml:"bucket,omitempty"`
+	// Owners are the emails that may view every artifact. The Worker reads
+	// them; on a host they are informational.
+	Owners []string `yaml:"owners,omitempty"`
+}
+
+// Configured reports whether host, account and bucket are all set.
+func (a ArtifactsConfig) Configured() bool {
+	return strings.TrimSpace(a.Host) != "" && strings.TrimSpace(a.AccountID) != "" && strings.TrimSpace(a.Bucket) != ""
+}
+
 // DesignConfig names the docs repository design pages are published to.
 type DesignConfig struct {
 	// Repo is the owner/name of the docs repository, or a git URL or local
@@ -544,6 +567,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Overview:      c.Overview,
 		Sessions:      c.Sessions,
 		Design:        c.Design,
+		Artifacts:     c.Artifacts,
 		Review:        c.Review,
 		CI:            c.CI,
 		Repos:         c.Repos,

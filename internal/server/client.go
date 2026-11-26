@@ -404,6 +404,8 @@ func slowCall(method string) (time.Duration, bool) {
 		return RepoListTimeout + 15*time.Second, false
 	case "design.publish":
 		return DesignPublishTimeout + 15*time.Second, true
+	case "artifact.publish":
+		return ArtifactPublishTimeout + 15*time.Second, true
 	case "aws.status":
 		return AWSStatusTimeout + 15*time.Second, false
 	case "aws.login_start":

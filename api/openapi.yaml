@@ -811,6 +811,12 @@ components:
             - harness.share_get
             - gateway.announce
             - design.publish
+            - artifact.publish
+            - artifact.list
+            - artifact.get
+            - artifact.share
+            - artifact.unshare
+            - artifact.delete
             - review.reveal
             - review.post
             - review.refresh
@@ -2600,6 +2606,95 @@ components:
         tag:
           type: string
           description: A write's last command tag, such as UPDATE 1.
+    ArtifactPublishResult:
+      type: object
+      description: >
+        artifact.publish {session?, page, files? [{path?, from}], title?, id?,
+        expect_version?, theme?}: publishes page as index.html (and each file
+        at path, else its path relative to the page's directory) as a new
+        version on aiman.fyi. Every file must resolve, symlinks followed,
+        inside the session's working directory or worktree. Records
+        artifact.published. Refusals: artifact_conflict (stale
+        expect_version or a concurrent write), invalid_params (a path outside
+        the session's directory, no page, over 255 files, 25 MiB a file or 64
+        MiB in all), session_scope (another session's artifact), not_found,
+        unavailable (not configured on this host). Off the device allowlist.
+      required: [type, artifact]
+      properties:
+        type:
+          type: string
+          const: artifact
+        artifact:
+          type: object
+          required: [id, version, url]
+          properties:
+            id:
+              type: string
+              description: 20 lower-case base32 characters.
+            version:
+              type: integer
+            url:
+              type: string
+              description: https://<host>/a/<id>/, the latest version.
+    ArtifactListResult:
+      type: object
+      description: >
+        artifact.list {}: the host's artifacts not deleted, newest first.
+        artifact.get {id} answers {type: artifact_info, artifact} with the same
+        fields plus versions [{n, session, created, url, files [{path, sha256,
+        size, type}]}] and share {emails, domains}. Both are off the device
+        allowlist.
+      required: [type, artifacts]
+      properties:
+        type:
+          type: string
+          enum: [artifacts, artifact_info]
+        artifacts:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              title:
+                type: string
+              session:
+                type: string
+              latest:
+                type: integer
+              url:
+                type: string
+              shared:
+                type: boolean
+              created:
+                type: string
+                format: date-time
+    ArtifactShareResult:
+      type: object
+      description: >
+        Operator only (needs_operator for a session). artifact.share {id,
+        emails?, domains?} and artifact.unshare {id, emails?, domains?, all?}
+        answer {type: artifact_share, share: {emails, domains}};
+        artifact.delete {id} answers {type: artifact_deleted, id}. Off the
+        device allowlist.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [artifact_share, artifact_deleted]
+        id:
+          type: string
+        share:
+          type: object
+          properties:
+            emails:
+              type: array
+              items:
+                type: string
+            domains:
+              type: array
+              items:
+                type: string
     HarnessShareResult:
       type: object
       description: >

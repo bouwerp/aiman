@@ -42,6 +42,9 @@ const (
 	// EventDesignPublished records a design page push: revision, url and the
 	// Decisions-table triage counts.
 	EventDesignPublished EventKind = "design.published"
+	// EventArtifactPublished records an artifact version: id, version, the
+	// file count (kit included) and the caller's bytes.
+	EventArtifactPublished EventKind = "artifact.published"
 	// EventConsultFinished records a consult's report on its parent's ledger:
 	// objection counts by severity and the verdict.
 	EventConsultFinished EventKind = "consult.finished"
