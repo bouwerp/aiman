@@ -478,3 +478,7 @@ These names and rules are part of the contract. The acceptance tests use them.
 - `FeedSlackConfig` yaml tags are `exclude`, `bots`, `calls_per_minute`.
 - Tier 1 degradation is the budget's natural order (DMs and the mention search first); there is no separate detection.
 - Open gaps, owned by follow-up P3d: a new reply to a thread whose parent is older than the conversation cursor is seen only through the mention search, because `slack.Message` has no `latest_reply` and history with `oldest` does not return the old parent. P3d adds `LatestReply` (`latest_reply,omitempty`) to `slack.Message` and polls the replies of threads the member is in (thread cursors `t:…`, last 14 days) within the replies budget; it also adds `feeddb.Writer.DeleteCursors` and prunes thread cursors older than 14 days.
+
+**As landed by P3d**
+
+- `Writer.Append(ctx, events, cursors, drop ...CursorKey)` deletes the dropped keys in the same transaction. The collector drops every stored key a source left out of its returned map, so a source must return every cursor it wants kept.
