@@ -489,3 +489,10 @@ These names and rules are part of the contract. The acceptance tests use them.
 - The agent's digest lines are kept per batch in `~/.aiman/feed/digest/<batch>.json`. `feed.events {digest: true}` lists the unanswered events of the newest 10 batches and every event of a batch that failed twice, with the digest line in the event's `title`.
 - `feed.status` `collector.state` is `off`, `not_started` (no `feed.db`), `starting`, `ok`, `stale` (no poll for 10 minutes) or `error`.
 - The daily cap counts batches since local midnight. Recovery and retries ignore the interval. Muted events stay above the high-water mark until a later unmuted event is cut past them.
+
+**As landed by P8, P9 and P11**
+
+- `todo_add` writes with `domain.AuthorAiman` (there is no `feed` author). Executors live in `internal/feed/act.go`. `ActDeps` has optional `OnAction` (hub events) and `TTL` (expiry again after a snooze wakes).
+- `slack.Draft` returns no permalink; an approved draft's `Result` is `draft saved: slack draft <id> in <channel> (Drafts & Sent)`. With no Slack login on the host, approving a `slack_draft` is refused.
+- The CLI prints `status` and `memory` as JSON in plain mode; `actions`, `events` and `act` print lines.
+- The gateway routes `feed.act` through a small change in `rpc.go` `admitDevice`, refuses an out-of-range `option` with 400 `invalid_params`, and sends a `feed_action` push only to devices subscribed to the `waiting_input` state.
