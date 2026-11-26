@@ -369,6 +369,8 @@ func runSubcommand(rest []string) (handled bool, err error) {
 		return true, runHost(rest[1:])
 	case "design":
 		return true, runDesign(rest[1:], os.Getenv)
+	case "artifact":
+		return true, runArtifact(rest[1:], os.Getenv)
 	case "land":
 		return true, runLand(rest[1:], os.Getenv)
 	case "review":
