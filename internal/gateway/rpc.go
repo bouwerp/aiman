@@ -61,7 +61,13 @@ func (s *Server) admitDevice(w http.ResponseWriter, r *http.Request, body rpcBod
 		}
 		return false
 	}
-	if p.device.AllowDestructive || !gateCheckedMethod(body.Method) {
+	if p.device.AllowDestructive {
+		return true
+	}
+	if body.Method == "feed.act" {
+		return s.admitFeedAct(w, body)
+	}
+	if !gateCheckedMethod(body.Method) {
 		return true
 	}
 	return s.admitTodoEdit(w, body)

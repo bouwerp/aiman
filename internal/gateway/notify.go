@@ -92,14 +92,16 @@ type phoneSink struct {
 func (p *phoneSink) Name() string { return "phone" }
 
 // pushKinds are the notification kinds the phone sink pushes, each one about a
-// session the push opens. Host-level kinds (agent and host updates) and kinds
-// a newer serve adds are not pushed.
+// session the push opens, except feed_action, whose push opens the Feed tab.
+// Host-level kinds (agent and host updates) and kinds a newer serve adds are
+// not pushed.
 var pushKinds = map[domain.NotifyKind]bool{
 	domain.NotifyWaitingInput: true,
 	domain.NotifyCIEscalation: true,
 	domain.NotifyReviewDone:   true,
 	domain.NotifyEnded:        true,
 	domain.NotifyError:        true,
+	domain.NotifyFeedAction:   true,
 }
 
 // phoneStateFor maps a kind in pushKinds to the phone state a device
@@ -134,14 +136,20 @@ func (p *phoneSink) Send(ctx context.Context, n domain.Notification) error {
 			title = "Aiman: CI needs you"
 		case domain.NotifyReviewDone:
 			title = "Aiman: review done"
+		case domain.NotifyFeedAction:
+			title = "Aiman: feed action"
 		default:
+		}
+		data := pushData(p.host, n.SessionID)
+		if n.Kind == domain.NotifyFeedAction {
+			data = feedPushData(p.host)
 		}
 		msgs = append(msgs, expoMessage{
 			To:    d.Token,
 			Title: title,
 			Body:  n.Text,
 			Sound: "default",
-			Data:  pushData(p.host, n.SessionID),
+			Data:  data,
 		})
 	}
 	if len(msgs) == 0 || p.send == nil {
@@ -157,6 +165,15 @@ func pushData(host, session string) map[string]string {
 		"session": session,
 		"host":    host,
 		"url":     "aimanphone://h/" + url.PathEscape(host) + "/s/" + url.PathEscape(session),
+	}
+}
+
+// feedPushData opens the host's Feed tab; a feed action is about no session.
+func feedPushData(host string) map[string]string {
+	return map[string]string{
+		"session": "",
+		"host":    host,
+		"url":     "aimanphone://h/" + url.PathEscape(host) + "/feed",
 	}
 }
 

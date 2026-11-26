@@ -51,7 +51,7 @@ func TestPhoneSinkSkipsUnknownKind(t *testing.T) {
 	}
 }
 
-// pushKinds is exactly the set phoneStateFor names.
+// pushKinds is exactly this set.
 func TestPushKindsMatchPhoneStates(t *testing.T) {
 	want := []domain.NotifyKind{
 		domain.NotifyWaitingInput,
@@ -59,6 +59,7 @@ func TestPushKindsMatchPhoneStates(t *testing.T) {
 		domain.NotifyReviewDone,
 		domain.NotifyEnded,
 		domain.NotifyError,
+		domain.NotifyFeedAction,
 	}
 	if len(pushKinds) != len(want) {
 		t.Errorf("pushKinds = %v, want exactly %v", pushKinds, want)
