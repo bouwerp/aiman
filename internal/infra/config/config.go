@@ -529,6 +529,12 @@ type ArtifactsConfig struct {
 	// Owners are the emails that may view every artifact. The Worker reads
 	// them; on a host they are informational.
 	Owners []string `yaml:"owners,omitempty"`
+	// Team is the Zero Trust team domain (<team>.cloudflareaccess.com, or
+	// just <team>); aiman artifact setup reads it when --team is not given.
+	Team string `yaml:"team,omitempty"`
+	// IdentityProvider is the Access identity provider id (Google) for
+	// aiman artifact setup when --idp is not given.
+	IdentityProvider string `yaml:"identity_provider,omitempty"`
 	// Auth is ArtifactsAuthCFOAuth or ArtifactsAuthR2Key. Unset picks r2_key
 	// when the host has its R2 key file, else cf_oauth when it has the cf
 	// CLI's config.

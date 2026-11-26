@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -402,6 +403,8 @@ func parseArtifactSetup(args []string, cfg config.ArtifactsConfig) (artifactSetu
 	pick(&c.Host, cfg.Host, "")
 	pick(&c.Zone, c.Host, "")
 	pick(&c.Bucket, cfg.Bucket, artifact.SetupWorkerName)
+	pick(&c.TeamDomain, cfg.Team, "")
+	pick(&c.IdentityProvider, cfg.IdentityProvider, "")
 	if len(c.Owners) == 0 {
 		c.Owners = cfg.Owners
 	}
@@ -455,7 +458,7 @@ func runArtifactSetup(args []string, in io.Reader, out, errOut io.Writer) error 
 	}
 	var token string
 	if parsed.cfOAuth {
-		token, err = cfOAuthToken(filepath.Join(home, ".config", "cloudflare", "config", "default.json"), time.Now())
+		token, err = setupCFToken(home, parsed.cfg.AccountID)
 	} else {
 		token, err = readSecretLine(in, errOut, "Cloudflare API token: ")
 	}
@@ -503,6 +506,20 @@ func readSecretLine(in io.Reader, errOut io.Writer, prompt string) (string, erro
 		return "", errors.New("no Cloudflare API token on stdin")
 	}
 	return token, nil
+}
+
+// setupCFToken takes the cf CLI's OAuth token. With cf on PATH it renews an
+// expiring token through `cf auth whoami`, as serve does; without it, it
+// refuses an expired one.
+func setupCFToken(home, account string) (string, error) {
+	path := cfConfigPath(home)
+	cf, err := exec.LookPath("cf")
+	if err != nil {
+		return cfOAuthToken(path, time.Now())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfRefreshTimeout+5*time.Second)
+	defer cancel()
+	return artifact.CFOAuthToken(path, cfRefresher(cf, account))(ctx)
 }
 
 // cfOAuthToken reads the cf CLI's OAuth token, refusing one past its

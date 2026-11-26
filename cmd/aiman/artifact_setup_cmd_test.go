@@ -99,3 +99,17 @@ func TestCFOAuthToken(t *testing.T) {
 		t.Fatalf("expired: %v", err)
 	}
 }
+
+func TestArtifactSetupTeamAndIdPFromConfig(t *testing.T) {
+	conf := config.ArtifactsConfig{Host: "aiman.fyi", AccountID: "acc", Bucket: "b", Owners: []string{"me@x.com"}, Team: "cool-tree", IdentityProvider: "g1"}
+	got, err := parseArtifactSetup(nil, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.cfg.TeamDomain != "cool-tree.cloudflareaccess.com" || got.cfg.IdentityProvider != "g1" {
+		t.Fatalf("cfg %+v", got.cfg)
+	}
+	if got, err = parseArtifactSetup([]string{"--idp", "g2"}, conf); err != nil || got.cfg.IdentityProvider != "g2" {
+		t.Fatalf("flag must win: %+v %v", got.cfg, err)
+	}
+}
