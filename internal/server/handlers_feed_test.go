@@ -202,8 +202,8 @@ func TestFeedActMemoryAndUnmute(t *testing.T) {
 		t.Errorf("unmute calls = %v", r.mutes.calls)
 	}
 	for _, op := range []string{"approve", "dismiss"} {
-		if resp := rpc(t, r.srv, "", "feed.act", map[string]any{"id": 1, "op": op}); resp.Error == nil || resp.Error.Code != CodeInvalidParams {
-			t.Errorf("%s = %+v, want invalid_params until P8", op, resp.Error)
+		if resp := rpc(t, r.srv, "", "feed.act", map[string]any{"id": 1, "op": op}); resp.Error == nil || resp.Error.Code != CodeNotFound {
+			t.Errorf("%s of an unknown action = %+v, want not_found", op, resp.Error)
 		}
 	}
 	if resp := rpc(t, r.srv, "sess-1", "feed.act", map[string]any{"op": "forget_memory", "memory_id": "m2"}); resp.Error == nil || resp.Error.Code != CodeNeedsOperator {

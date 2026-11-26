@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/bouwerp/aiman/internal/feeddb"
 	"github.com/bouwerp/aiman/internal/harness/images"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/slack"
 	"github.com/bouwerp/aiman/internal/infra/sqlite"
 	"github.com/bouwerp/aiman/internal/server"
 )
@@ -111,6 +113,14 @@ func (l *lazyFeedDB) Unmute(ctx context.Context, scope domain.FeedMuteScope, key
 	return mw.Unmute(ctx, scope, key)
 }
 
+func (l *lazyFeedDB) Mute(ctx context.Context, m domain.FeedMute) error {
+	_, mw, err := l.handles()
+	if err != nil {
+		return err
+	}
+	return mw.Mute(ctx, m)
+}
+
 func (l *lazyFeedDB) SetFloor(ctx context.Context, minEventID int64) error {
 	_, mw, err := l.handles()
 	if err != nil {
@@ -144,6 +154,15 @@ func feedAgent(cfg *config.Config) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// slackConfigured is true when a Slack login file or token env var exists.
+func slackConfigured(path string) bool {
+	if strings.TrimSpace(os.Getenv("AIMAN_SLACK_USER_TOKEN")) != "" {
+		return true
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // wireFeed wires the feed RPCs and, when feed.enabled, starts the manager.
@@ -198,7 +217,18 @@ func wireFeed(ctx context.Context, srv *server.Server, cfg *config.Config, dir s
 		lazy.Close()
 		return nil
 	}
-	srv.SetFeed(server.FeedDeps{Enabled: true, Store: db, Events: events, Mutes: lazy, Memory: m.Memory(), Dir: fdir, Settings: f})
+	act := feed.ActDeps{Mutes: lazy, MuteDays: f.MuteDaysOrDefault(), TodoAdd: srv.FeedTodoAdd, TTL: f.ActionTTLOrDefault()}
+	if slackPath := slack.TokenPath(dir); slackConfigured(slackPath) {
+		client := &slack.Client{Tokens: slack.Tokens(slackPath)}
+		act.SlackDraft = func(ctx context.Context, channel, threadTS, text string) (string, error) {
+			d, err := client.Draft(ctx, slack.DraftRequest{Channel: channel, Thread: threadTS, Text: text})
+			if err != nil {
+				return "", err
+			}
+			return "slack draft " + d.ID + " in " + channel + " (Drafts & Sent)", nil
+		}
+	}
+	srv.SetFeed(server.FeedDeps{Enabled: true, Store: db, Events: events, Mutes: lazy, Act: act, Memory: m.Memory(), Dir: fdir, Settings: f})
 	if agent == "" {
 		log.Printf("feed: no agent the job container can run in feed.agent or the %s tier; batches wait", f.TierOrDefault())
 	} else {
