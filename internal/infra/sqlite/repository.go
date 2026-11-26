@@ -257,6 +257,10 @@ func migrate(db *sql.DB) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create harness share tables: %w", err)
 	}
 
+	if err := ensureFeedTables(db); err != nil {
+		return nil, fmt.Errorf("failed to create feed tables: %w", err)
+	}
+
 	return &Repository{
 		db:            db,
 		clearedOnOpen: clearedAWSProfiles,
