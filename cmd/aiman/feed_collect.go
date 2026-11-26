@@ -15,9 +15,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/feedcollect"
 	"github.com/bouwerp/aiman/internal/feeddb"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	"github.com/bouwerp/aiman/internal/infra/slack"
 	"github.com/bouwerp/aiman/internal/server"
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +30,11 @@ type feedCollectConfig struct {
 	Feed struct {
 		Enabled   *bool  `yaml:"enabled"`
 		Retention string `yaml:"retention"`
+		Slack     struct {
+			CallsPerMinute int      `yaml:"calls_per_minute"`
+			Exclude        []string `yaml:"exclude"`
+			Bots           []string `yaml:"bots"`
+		} `yaml:"slack"`
 	} `yaml:"feed"`
 }
 
@@ -69,7 +76,9 @@ func runFeedCollect(args []string) error {
 	sources := []feedcollect.Source{
 		feedcollect.NewAimanSource(feedServeRPC(sock), true),
 		feedcollect.NewGitHubSource(feedGH),
-		// The Slack source (P3b) joins here when the member has a Slack login.
+	}
+	if src := feedSlackSource(dir, cfg); src != nil {
+		sources = append(sources, src)
 	}
 	c, err := feedcollect.New(feedcollect.Options{
 		DB: db, Sources: sources, Retention: retention, Log: log.Printf,
@@ -85,6 +94,50 @@ func runFeedCollect(args []string) error {
 	}
 	log.Printf("feed: collector stopped")
 	return nil
+}
+
+// feedSlackSource is the Slack source when the member has a Slack login,
+// else nil with one log line.
+func feedSlackSource(dir string, cfg feedCollectConfig) feedcollect.Source {
+	path := slack.TokenPath(dir)
+	if strings.TrimSpace(os.Getenv("AIMAN_SLACK_USER_TOKEN")) == "" {
+		if _, err := os.Stat(path); err != nil {
+			log.Printf("feed: no Slack login (%s); the Slack source does not run", path)
+			return nil
+		}
+	}
+	client := &slack.Client{Tokens: slack.Tokens(path), Sleep: feedcollect.SlackNoRetry}
+	sc := cfg.Feed.Slack
+	return &feedLazySlack{client: client, opts: feedcollect.SlackOptions{
+		API: client, CallsPerMinute: sc.CallsPerMinute, Exclude: sc.Exclude, Bots: sc.Bots,
+	}}
+}
+
+// feedLazySlack builds the Slack source on its first poll that can ask
+// auth.test who the member is, so a collector started offline still reads
+// Slack once the network is back; until then the poll error is the health.
+type feedLazySlack struct {
+	client *slack.Client
+	opts   feedcollect.SlackOptions
+	src    feedcollect.Source
+}
+
+func (l *feedLazySlack) Name() domain.FeedSource { return "slack" }
+func (l *feedLazySlack) Every() time.Duration    { return feedcollect.SlackEvery }
+
+func (l *feedLazySlack) Poll(ctx context.Context, cursors map[string]string, mutes []domain.FeedMute) ([]domain.FeedEvent, map[string]string, error) {
+	if l.src == nil {
+		auth, err := l.client.AuthTest(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("slack auth.test: %w", err)
+		}
+		if auth.UserID == "" {
+			return nil, nil, errors.New("slack auth.test: no user id")
+		}
+		l.opts.Self = auth.UserID
+		l.src = feedcollect.NewSlackSource(l.opts)
+	}
+	return l.src.Poll(ctx, cursors, mutes)
 }
 
 func readFeedCollectConfig(path string) (feedCollectConfig, error) {
