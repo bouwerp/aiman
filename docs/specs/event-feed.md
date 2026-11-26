@@ -444,3 +444,21 @@ These names and rules are part of the contract. The acceptance tests use them.
 - `agentjob.HostCredentials(home)` returns `CredentialReader{Home, Getenv, Now}.For`; `images.HostCredentials` aliases the struct.
 - Other exports P7 can use: `Supported`, `Egress`, `Prepare`, `Launch`, `IsELF`, `JobDir`, `DefaultTimeout`, `Label`.
 - Job containers still carry the label `aiman.review=1` and the review's error texts. P7 gives feed jobs the label `aiman.feed=1` and job-neutral error texts through `Options`, without changing the image review.
+
+**As landed by P1 and P2 (read before P6 and P7)**
+
+- `feed_digests(id INTEGER PRIMARY KEY, members TEXT, event TEXT, created_at INTEGER)` exists with no methods. P7 adds the methods and may change the columns; digest ids are negative, as above.
+- `Reader.Thread` treats `beforeID` 0 or less as no upper bound.
+- `ListFeedActions` with no states returns every state.
+- `(*sqlite.Repository).LastEventRowID(ctx) (int64, error)` answers the newest ledger rowid (used for `after_rowid: -1`).
+
+**Ownership moved at P7 start**
+
+- P7 adds `internal/infra/config/feed.go` (spec §10, §12 accessors) and `domain.NotifyFeedAction`, because the manager needs both. P10 keeps the settings page and `applyFeedSetting`; P11 keeps `pushKinds` and the push data.
+- `feed.act` lands in P7 with `forget_memory` and `unmute`; P8 adds `approve` and `dismiss`.
+
+**As landed by P6**
+
+- `FoldDigests` gives a digest the last folded event's id; P7 replaces it with the negative `feed_digests` id when it stores the digest.
+- A digest's `ThreadKey` is `slack:<channel>`; its body lines are `[<event id>] <actor>: <text>`, so the agent can cite one message in it.
+- `brief.go` exports `DigestKind`, `MaxOptions`, `MaxMemoryOps`, `MaxMemoryBullet`, `MaxMemoryBytes`, `MaxActionText`.
