@@ -1,0 +1,163 @@
+/* aiman artifact kit: theme tokens and base components.
+   A theme is a set of tokens. Pick one with <html data-kit-theme="plex|grotesk|signal">.
+   Mode follows prefers-color-scheme unless <html data-kit-mode="light|dark">.
+   Diagrams (hand SVG classes d-*, and mermaid through kit.js) read the same tokens. */
+
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+/* ---- plex: cool slate, IBM Plex (light) ---- */
+:root, [data-kit-theme="plex"] {
+  --bg:#f6f8fa; --surface:#ffffff; --sunk:#eef1f4; --fg:#17212b; --muted:#5a6877; --line:#d5dce4;
+  --accent:#0b6e8f; --accent-soft:#dff0f5;
+  --new:#1d7a46; --new-soft:#dff3e6; --chg:#9a6500; --chg-soft:#fbecc8; --del:#b3261e; --del-soft:#fbe1de;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --display:var(--sans); --display-weight:600;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --radius:6px; color-scheme:light;
+}
+/* ---- grotesk: mint grey, Inter and Space Grotesk (light) ---- */
+[data-kit-theme="grotesk"] {
+  --bg:#f3f5f4; --surface:#ffffff; --sunk:#e9eeec; --fg:#16211e; --muted:#566660; --line:#d3dbd8;
+  --accent:#0b6b5a; --accent-soft:#dcefe9;
+  --new:#0b6b5a; --new-soft:#dcefe9; --chg:#8a5a00; --chg-soft:#f7ebcf; --del:#a23b2a; --del-soft:#fbeeea;
+  --sans:"Inter",system-ui,sans-serif;
+  --display:"Space Grotesk",system-ui,sans-serif; --display-weight:600;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --radius:10px;
+}
+/* ---- signal: white and ink, green for the fix, red for the risk (light) ---- */
+[data-kit-theme="signal"] {
+  --bg:#ffffff; --surface:#ffffff; --sunk:#eafaf2; --fg:#0b0b10; --muted:#5a5f66; --line:#d9dee2;
+  --accent:#00a862; --accent-soft:#eafaf2;
+  --new:#00a862; --new-soft:#eafaf2; --chg:#8a5a00; --chg-soft:#fff2d6; --del:#d93b3b; --del-soft:#fdeeee;
+  --sans:"Inter",system-ui,sans-serif;
+  --display:"Space Grotesk",Inter,sans-serif; --display-weight:700;
+  --mono:ui-monospace,Menlo,monospace;
+  --radius:8px;
+}
+
+/* ---- dark values: auto, or forced with data-kit-mode="dark" ---- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-kit-mode="light"]), :root:not([data-kit-mode="light"]) [data-kit-theme="plex"] {
+    --bg:#10161c; --surface:#18212a; --sunk:#141b22; --fg:#e4eaf0; --muted:#97a5b3; --line:#2e3b48;
+    --accent:#5cc0de; --accent-soft:#12343f;
+    --new:#6fd39a; --new-soft:#173a27; --chg:#f0c060; --chg-soft:#43330f; --del:#ff8f86; --del-soft:#4a1c19;
+    color-scheme:dark;
+  }
+  :root:not([data-kit-mode="light"])[data-kit-theme="grotesk"] {
+    --bg:#0f1614; --surface:#172220; --sunk:#1e2b28; --fg:#e6eeeb; --muted:#9db0aa; --line:#2c3d39;
+    --accent:#4fc7ae; --accent-soft:#123a32;
+    --new:#4fc7ae; --new-soft:#123a32; --chg:#e0b057; --chg-soft:#3a2e12; --del:#f09a88; --del-soft:#33201c;
+  }
+  :root:not([data-kit-mode="light"])[data-kit-theme="signal"] {
+    --bg:#07130d; --surface:#0b1a12; --sunk:#0d2419; --fg:#e8f3ec; --muted:#9bb0a4; --line:#24382d;
+    --accent:#2fd389; --accent-soft:#0d2419;
+    --new:#2fd389; --new-soft:#0d2419; --chg:#f3c467; --chg-soft:#2b2410; --del:#ff6b6b; --del-soft:#2a1414;
+  }
+}
+:root[data-kit-mode="dark"], :root[data-kit-mode="dark"][data-kit-theme="plex"] {
+  --bg:#10161c; --surface:#18212a; --sunk:#141b22; --fg:#e4eaf0; --muted:#97a5b3; --line:#2e3b48;
+  --accent:#5cc0de; --accent-soft:#12343f;
+  --new:#6fd39a; --new-soft:#173a27; --chg:#f0c060; --chg-soft:#43330f; --del:#ff8f86; --del-soft:#4a1c19;
+  color-scheme:dark;
+}
+:root[data-kit-mode="dark"][data-kit-theme="grotesk"] {
+  --bg:#0f1614; --surface:#172220; --sunk:#1e2b28; --fg:#e6eeeb; --muted:#9db0aa; --line:#2c3d39;
+  --accent:#4fc7ae; --accent-soft:#123a32;
+  --new:#4fc7ae; --new-soft:#123a32; --chg:#e0b057; --chg-soft:#3a2e12; --del:#f09a88; --del-soft:#33201c;
+}
+:root[data-kit-mode="dark"][data-kit-theme="signal"] {
+  --bg:#07130d; --surface:#0b1a12; --sunk:#0d2419; --fg:#e8f3ec; --muted:#9bb0a4; --line:#24382d;
+  --accent:#2fd389; --accent-soft:#0d2419;
+  --new:#2fd389; --new-soft:#0d2419; --chg:#f3c467; --chg-soft:#2b2410; --del:#ff6b6b; --del-soft:#2a1414;
+}
+
+/* ---- base ---- */
+*, *::before, *::after { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:15.5px/1.55 var(--sans); font-feature-settings:"ss01","cv11";
+  padding-block:32px 72px;
+  padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px));
+}
+.kit-page { max-width:880px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+.kit-page > * { margin:0; min-width:0; }
+h1, h2, h3, h4 { font-family:var(--display); font-weight:var(--display-weight); letter-spacing:-.015em; line-height:1.15; text-wrap:balance; }
+h1 { font-size:clamp(26px, 4.2vw, 38px); }
+h2 { font-size:20px; margin-top:22px; padding-top:20px; border-top:1px solid var(--line); }
+h3 { font-size:16.5px; margin-top:10px; }
+p, li { max-width:72ch; }
+a { color:var(--accent); text-underline-offset:2px; }
+a:focus-visible, button:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+strong { font-weight:600; }
+ul, ol { padding-left:20px; display:flex; flex-direction:column; gap:5px; }
+code { font-family:var(--mono); font-size:.86em; background:var(--sunk); padding:1px 5px; border-radius:4px; overflow-wrap:anywhere; }
+pre { font-family:var(--mono); font-size:13px; line-height:1.6; background:var(--sunk); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; overflow-x:auto; }
+pre code { background:none; padding:0; font-size:inherit; overflow-wrap:normal; }
+hr { border:0; border-top:1px solid var(--line); }
+blockquote { margin:0; border-left:3px solid var(--accent); background:var(--sunk); padding:10px 14px; border-radius:0 var(--radius) var(--radius) 0; }
+
+.eyebrow { font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+.lede { font-size:17px; color:var(--muted); }
+.meta { font-size:13.5px; color:var(--muted); }
+
+/* tables live in a scroll box */
+.scroll { overflow-x:auto; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); }
+table { border-collapse:collapse; width:100%; font-size:14px; font-variant-numeric:tabular-nums; }
+th, td { text-align:left; padding:8px 11px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; white-space:nowrap; background:var(--sunk); }
+tr:last-child td { border-bottom:0; }
+
+/* tags */
+.tag { display:inline-block; font-size:12px; font-weight:600; padding:1px 8px; border-radius:999px; white-space:nowrap; }
+.tag.new, .tag.accept { background:var(--new-soft); color:var(--new); }
+.tag.chg, .tag.defer { background:var(--chg-soft); color:var(--chg); }
+.tag.del, .tag.reject { background:var(--del-soft); color:var(--del); }
+.tag.plain { border:1px solid var(--line); color:var(--muted); }
+
+/* figures: a panel holding a diagram */
+figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; overflow:hidden; }
+figcaption { font-size:13.5px; color:var(--muted); margin-top:10px; }
+.legend { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:13px; color:var(--muted); align-items:center; }
+.legend span { display:inline-flex; align-items:center; gap:7px; }
+.legend i { width:14px; height:14px; border-radius:3px; border:1.5px solid; display:inline-block; }
+.legend .new i { background:var(--new-soft); border-color:var(--new); }
+.legend .chg i { background:var(--chg-soft); border-color:var(--chg); }
+.legend .del i { background:var(--del-soft); border-color:var(--del); border-style:dashed; }
+
+/* hand SVG diagrams: shapes take these classes, so colours follow the theme */
+svg.d { display:block; width:100%; height:auto; color:var(--fg); }
+svg.d text { font-family:var(--sans); font-size:12.5px; fill:currentColor; }
+svg.d .lab { fill:var(--muted); font-size:11.5px; }
+svg.d .ttl { font-weight:600; }
+svg.d .box { fill:var(--surface); stroke:currentColor; stroke-width:1.2; }
+svg.d .box.new { fill:var(--new-soft); stroke:var(--new); stroke-width:1.6; }
+svg.d .box.chg { fill:var(--chg-soft); stroke:var(--chg); stroke-width:1.6; }
+svg.d .box.del { fill:var(--del-soft); stroke:var(--del); stroke-width:1.6; stroke-dasharray:5 4; }
+svg.d .box.acc { fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.6; }
+svg.d .ln { stroke:currentColor; stroke-width:1.3; fill:none; }
+svg.d .ln.new { stroke:var(--new); } svg.d .ln.del { stroke:var(--del); } svg.d .ln.acc { stroke:var(--accent); }
+svg.d .ln.dash { stroke:var(--muted); stroke-dasharray:4 4; }
+/* arrowheads: one <marker> per role, its path filled with currentColor (Safari has no context-stroke) */
+svg.d marker path { fill:currentColor; }
+svg.d marker.new { color:var(--new); } svg.d marker.del { color:var(--del); } svg.d marker.acc { color:var(--accent); } svg.d marker.mute { color:var(--muted); }
+
+/* mermaid output sits in a figure */
+pre.mermaid { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; text-align:center; overflow:hidden; cursor:zoom-in; }
+/* mermaid sets width="100%" and an inline max-width of the natural size: wide diagrams shrink to fit, small ones keep their size */
+pre.mermaid svg { height:auto; }
+/* delta classes on any mermaid node (classDef fills are ignored by class diagrams) */
+pre.mermaid svg g.new > :is(rect,path,polygon,circle,ellipse), pre.mermaid svg g.new > g.label-container > path { fill:var(--new-soft) !important; stroke:var(--new) !important; stroke-width:1.6px !important; }
+pre.mermaid svg g.changed > :is(rect,path,polygon,circle,ellipse), pre.mermaid svg g.changed > g.label-container > path { fill:var(--chg-soft) !important; stroke:var(--chg) !important; stroke-width:1.6px !important; }
+pre.mermaid svg g.removed > :is(rect,path,polygon,circle,ellipse), pre.mermaid svg g.removed > g.label-container > path { fill:var(--del-soft) !important; stroke:var(--del) !important; stroke-width:1.6px !important; stroke-dasharray:5 4 !important; }
+
+/* click a diagram to see it larger */
+.kit-zoom { position:fixed; inset:0; z-index:20; background:color-mix(in srgb, var(--bg) 92%, transparent); display:flex; align-items:center; justify-content:center; padding:24px; cursor:zoom-out; }
+.kit-zoom > div { width:min(96vw, 1800px); max-height:94vh; overflow:auto; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:20px; }
+.kit-zoom svg { width:100% !important; max-width:none !important; height:auto; }
+
+/* theme switcher */
+.kit-switch { position:fixed; top:10px; right:10px; display:flex; gap:6px; z-index:10; }
+.kit-switch select { font:12.5px var(--sans); color:var(--fg); background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+@media print { .kit-switch { display:none; } body { padding:0; } }
