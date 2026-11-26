@@ -22,6 +22,7 @@ const (
 	focusList a1Focus = iota
 	focusPrompt
 	focusTodos
+	focusFeed
 )
 
 // applyTrackedSessionMsg handles a to-do load, a failed to-do write, a reply,
@@ -154,7 +155,7 @@ func (m *Model) forwardWhileReplying(msg tea.Msg, cmds []tea.Cmd) (tea.Model, te
 // ctrl+c is not consumed: it still quits. A to-do focus whose session row is
 // gone drops the key instead of editing the list.
 func (m *Model) handleFocusedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	if msg.String() == "ctrl+c" || (m.focus != focusPrompt && m.focus != focusTodos) {
+	if msg.String() == "ctrl+c" || (m.focus != focusPrompt && m.focus != focusTodos && m.focus != focusFeed) {
 		return m, nil, false
 	}
 	m.exitFocusIfSessionGone()
@@ -164,6 +165,9 @@ func (m *Model) handleFocusedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	case focusTodos:
 		model, cmd := m.handleTodoKey(msg)
+		return model, cmd, true
+	case focusFeed:
+		model, cmd := m.handleFeedKey(msg)
 		return model, cmd, true
 	default:
 		return m, nil, true
@@ -392,6 +396,9 @@ func stylePromptMarker(marker string) string {
 
 func (m *Model) hintLine(width int) string {
 	text := hintFor(m.focus)
+	if m.focus == focusFeed {
+		text = m.feedHint()
+	}
 	if m.focus == focusList {
 		if it, ok := m.selectedSessionItem(); ok && offerVerify(it.session, m.gitStatus, reviewerRunning(it.session.ID, m.allSessions)) {
 			text = "V verify · " + text
@@ -421,10 +428,11 @@ func hintFor(focus a1Focus) string {
 const a1Chrome = 4
 
 func (m *Model) sessionChrome() int {
+	rows := a1Chrome + m.feedPanelHeight()
 	if m.helpWraps() {
-		return a1Chrome + 1
+		return rows + 1
 	}
-	return a1Chrome
+	return rows
 }
 
 // helpWraps reports that `?` is showing a second help line on the sessions tab.

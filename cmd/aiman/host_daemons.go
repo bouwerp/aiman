@@ -76,7 +76,7 @@ func (h *hostDaemons) Daemons(ctx context.Context, refresh bool) ([]server.Daemo
 
 	rows := []server.DaemonState{h.serveRow()}
 	var wg sync.WaitGroup
-	others := []remotesvc.Kind{remotesvc.KindGateway, remotesvc.KindTrigger}
+	others := []remotesvc.Kind{remotesvc.KindGateway, remotesvc.KindTrigger, remotesvc.KindFeed}
 	read := make([]server.DaemonState, len(others))
 	for i, k := range others {
 		wg.Go(func() { read[i] = h.readDaemon(ctx, k) })

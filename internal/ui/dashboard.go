@@ -180,6 +180,8 @@ const (
 	viewStateOverview           // the newest overview of one host's sessions
 	viewStateSelfUpdate         // update this laptop's aiman and restart
 	viewStateGatewayPair        // pairing QR for the phone gateway on a remote
+	viewStateFeed               // the Feed page (F): actions, digest, batches, memory
+	viewStateFeedSettings       // Admin Menu → Feed
 )
 
 type mainTab int
@@ -208,6 +210,8 @@ func daemonKindLabel(kind string) string {
 		return "agent API"
 	case string(remotesvc.KindGateway):
 		return "phone gateway"
+	case string(remotesvc.KindFeed):
+		return "event feed"
 	case "":
 		return "trigger"
 	default:
@@ -362,6 +366,14 @@ type Model struct {
 	agentUpdates    *agentUpdatesView              // "Agents on <host>" page state
 	overview        *overviewView                  // Overview page state
 	overviewStatus  map[string]*overviewHostStatus // host → newest overview run, for the header banner
+	feed            map[string]*feedHostState      // host → feed status, open actions and their events
+	feedCursor      int                            // selected action in the feed panel
+	feedExpanded    bool                           // v: the panel lists more rows
+	feedTrace       bool                           // t: the detail shows the whole trace
+	feedMenu        *feedDismissMenu               // D: dismiss reason menu
+	feedEdit        *feedEditState                 // e: option text editor
+	feedPage        *feedPageView                  // Feed page state
+	feedSettings    *feedSettingsView              // Feed settings page state
 	gatewayPair     *gatewayPairView               // phone pairing page state
 	currentTab      mainTab
 	menu            list.Model
@@ -790,7 +802,7 @@ func (m *Model) applyRemoteFilter() {
 		if m.remoteFilter != "" && r.Host != m.remoteFilter {
 			continue
 		}
-		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger), string(remotesvc.KindGateway)} {
+		for _, kind := range []string{string(remotesvc.KindServe), string(remotesvc.KindTrigger), string(remotesvc.KindGateway), string(remotesvc.KindFeed)} {
 			d, exists := m.daemons[domain.DaemonKey(r.Host, kind)]
 			if !exists {
 				d = domain.Daemon{RemoteHost: r.Host, Kind: kind, Status: domain.DaemonStatusStopped}
@@ -907,6 +919,8 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 			key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "usage and cost")),
 			key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "overview of the host's sessions")),
+			key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "feed actions")),
+			key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "feed page")),
 			key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update aiman (when a release is shown)")),
 		}
 	}
@@ -929,6 +943,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 	menuItems := []list.Item{
 		menuItem{title: "Manage Remote Servers", desc: "Add, edit, or remove remote dev servers", action: viewStateRemotes},
 		menuItem{title: "Agent API", desc: "Install, monitor, restart, and update aiman serve on remotes", action: viewStateAgentAPI},
+		menuItem{title: "Feed", desc: "Event feed: interval, caps, agent, Slack and GitHub sources", action: viewStateFeedSettings},
 		menuItem{title: "Provision Remote Server", desc: "100% setup: install gh, agents, node, and skills", action: viewStateProvisioningRemotePicker},
 		menuItem{title: "Auth Setup Wizard", desc: "Guided auth checks and instructions per remote tool", action: viewStateAuthRemotePicker},
 		menuItem{title: "JIRA Configuration", desc: "Update URL, Email, and Token", action: viewStateSetup},
@@ -2770,6 +2785,7 @@ func (m *Model) Init() tea.Cmd {
 		tickAWSCredTable(),
 		checkGitHubRelease(),
 		m.fetchOverviewStatusAll(),
+		m.fetchFeedAll(),
 	)
 }
 
@@ -3097,6 +3113,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonProbeMsg, serviceOpMsg, rtkInstallMsg, agentsStatusMsg, agentsUpdateMsg, agentsPollMsg, agentsMoveMsg,
 		gatewayPairMsg, gatewayPairTickMsg, githubReleaseMsg, githubReleaseDueMsg, resourcesMsg, resourcesTickMsg,
 		sessionIdentitySyncMsg, overviewMsg, overviewStartedMsg, overviewStatusMsg,
+		feedReadMsg, feedActedMsg, feedPageMsg, feedMemoryMsg,
 		selfUpdateStageMsg, selfUpdateStepMsg:
 		return m.routeRemoteServiceMsg(msg)
 	case discoveryResultMsg:
@@ -3195,7 +3212,7 @@ func (m *Model) updateByState(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		model, cmd := m.handleAgentAPIUpdate(msg)
 		return model, cmd, true
 
-	case viewStateAgentUpdates, viewStateOverview, viewStateSelfUpdate:
+	case viewStateAgentUpdates, viewStateOverview, viewStateSelfUpdate, viewStateFeed, viewStateFeedSettings:
 		model, cmd := m.handleHostPageUpdate(msg)
 		return model, cmd, true
 
@@ -3634,7 +3651,7 @@ func (m *Model) renderView() string {
 	case viewStateAgentAPI:
 		return m.renderAgentAPIView()
 
-	case viewStateAgentUpdates, viewStateOverview, viewStateSelfUpdate:
+	case viewStateAgentUpdates, viewStateOverview, viewStateSelfUpdate, viewStateFeed, viewStateFeedSettings:
 		return m.renderHostPage()
 
 	case viewStateSnapshotBrowser:
@@ -4398,6 +4415,17 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
+	if m.focus == focusFeed && (m.feedEdit != nil || m.feedMenu != nil) {
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey {
+			var cmd tea.Cmd
+			if m.feedEdit != nil {
+				m.feedEdit.input, cmd = m.feedEdit.input.Update(msg)
+			} else {
+				m.feedMenu.note, cmd = m.feedMenu.note.Update(msg)
+			}
+			cmds = append(cmds, cmd)
+		}
+	}
 	if m.focus == focusTodos && m.todoEdit != nil {
 		if _, isKey := msg.(tea.KeyPressMsg); !isKey {
 			m.ensureTodoInput()
@@ -4827,6 +4855,8 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case "ctrl+t":
 			m.enterTodoFocus()
 			return m, nil, true
+		case "ctrl+f":
+			return m, m.enterFeedFocus(), true
 		case "?":
 			m.showKeys = !m.showKeys
 			if m.width > 0 && m.height > 0 {
@@ -5048,6 +5078,9 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	}
 	if msg.String() == "O" && m.currentTab == tabSessions {
 		return m, m.enterOverview(), true
+	}
+	if msg.String() == "F" && m.currentTab == tabSessions {
+		return m, m.enterFeedPage(), true
 	}
 	if msg.String() == "q" || msg.String() == "esc" {
 		m.state = viewStateQuitConfirm
@@ -5654,6 +5687,9 @@ func (m *Model) handleMenuUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if i.action == viewStateAWSCredentials {
 					return m, m.enterAWSCredentials()
+				}
+				if i.action == viewStateFeedSettings {
+					return m, m.enterFeedSettings()
 				}
 				if i.action == viewStateSelfUpdate {
 					tag := ""
@@ -7312,7 +7348,7 @@ func (m *Model) applyDiscoveryResult(msg discoveryResultMsg) (tea.Model, tea.Cmd
 	// serve/trigger/gateway daemons checked (and, via maybeAutoUpdateServe,
 	// auto-updated if behind).
 	for host := range msg.reachableHosts {
-		for _, kind := range []remotesvc.Kind{remotesvc.KindServe, remotesvc.KindTrigger, remotesvc.KindGateway} {
+		for _, kind := range []remotesvc.Kind{remotesvc.KindServe, remotesvc.KindTrigger, remotesvc.KindGateway, remotesvc.KindFeed} {
 			probes = append(probes, m.probeTick(host, kind))
 		}
 	}
@@ -7524,7 +7560,13 @@ func (m *Model) renderMainView() string {
 		contentWidth = 1
 	}
 
-	body := header + "\n\n" + columns + "\n" + m.mainFooter(contentWidth)
+	body := header + "\n\n" + columns + "\n"
+	if m.currentTab == tabSessions {
+		if panel := m.renderFeedPanel(contentWidth); panel != "" {
+			body += panel + "\n"
+		}
+	}
+	body += m.mainFooter(contentWidth)
 	if banner := m.renderAWSCredExpiryBanner(); banner != "" {
 		body = banner + "\n" + body
 	}
@@ -7534,12 +7576,15 @@ func (m *Model) renderMainView() string {
 // renderSessionPanel builds the right-hand panel for the currently selected row.
 func (m *Model) renderSessionPanel(mainWidth int) string {
 	it, ok := m.selectedSessionItem()
-	if !ok {
+	if !ok && m.focus != focusFeed {
 		return ""
 	}
 	contentW := mainWidth - mainPanelFrame
 	if contentW < 1 {
 		contentW = 1
+	}
+	if m.focus == focusFeed {
+		return m.renderFeedDetail(contentW, m.list.Height())
 	}
 	toast := m.snapshotToastBlock()
 	s := it.session
@@ -7687,6 +7732,8 @@ func (m *Model) renderDaemonPanel(mainWidth int) string {
 			daemonLines = append(daemonLines, "In-pane agents talk to this process (skill / aiman session).")
 		case string(remotesvc.KindGateway):
 			daemonLines = append(daemonLines, "Phone HTTP/WebSocket proxy in front of the agent API socket.")
+		case string(remotesvc.KindFeed):
+			daemonLines = append(daemonLines, "Event feed collector (aiman feed collect).")
 		default:
 			daemonLines = append(daemonLines, "Autonomous GitHub/cron trigger daemon.")
 		}

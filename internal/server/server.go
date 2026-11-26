@@ -76,8 +76,10 @@ type Server struct {
 	procsLogMu sync.Mutex
 	procsLogAt time.Time // last "procs:" line, at most one a minute
 
-	ln       *Listener
-	repo     domain.SessionRepository
+	ln   *Listener
+	repo domain.SessionRepository
+	// feed is the feed.* RPCs' wiring (SetFeed); nil until serve wires it.
+	feed     atomic.Pointer[FeedDeps]
 	sessList sessionListCache
 	remote   domain.RemoteExecutor
 	create   sessionCreator
@@ -495,6 +497,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.handleReportAgentSession(ctx, req)
 	case "notify.since":
 		return s.handleNotifySince(ctx, req)
+	case "session.events_since":
+		return s.handleEventsSince(ctx, req)
 	case "verify.start":
 		return s.handleVerifyStart(ctx, req)
 	case "verify.status":
@@ -505,6 +509,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchContext(ctx, req)
 	case "usage.get", "limits.get":
 		return s.dispatchUsage(ctx, req)
+	case "feed.status", "feed.actions", "feed.batches", "feed.events", "feed.memory", "feed.act":
+		return s.dispatchFeed(ctx, req)
 	case "overview.run", "overview.get", "overview.list":
 		return s.dispatchOverview(ctx, req)
 	case "aws.status", "aws.login_start", "aws.login_status", "aws.log":

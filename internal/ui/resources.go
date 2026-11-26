@@ -292,6 +292,12 @@ func joinGauge(parts ...string) string {
 // else the overview banner alone, else the memory gauge alone, else none.
 func (m *Model) renderHeader(host string, sessions, needsYou int, scanning bool, width int) string {
 	mem, overview := m.headerGaugeParts()
+	// The feed badge is dropped first, before any part of the gauge.
+	if feed := m.feedBadge(); feed != "" {
+		if h, ok := renderA1HeaderFeed(host, joinGauge(mem, overview), feed, sessions, needsYou, scanning, width); ok {
+			return h
+		}
+	}
 	plain := renderA1Header(host, sessions, needsYou, scanning, width)
 	for _, g := range []string{joinGauge(mem, overview), overview, mem} {
 		if g == "" {

@@ -17,9 +17,10 @@ const (
 	OpRestartServe   = "restart-serve"
 	OpRestartGateway = "restart-gateway"
 	OpRestartTrigger = "restart-trigger"
+	OpRestartFeed    = "restart-feed"
 )
 
-var operations = []string{OpRestartServe, OpRestartGateway, OpRestartTrigger}
+var operations = []string{OpRestartServe, OpRestartGateway, OpRestartTrigger, OpRestartFeed}
 
 // Operation refusal reasons.
 const (

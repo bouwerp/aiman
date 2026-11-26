@@ -52,6 +52,8 @@ func TestHostDaemonsReadsCachesAndLogs(t *testing.T) {
 		switch {
 		case strings.Contains(script, remotesvc.LogSourceMarker):
 			return remotesvc.LogSourceMarker + "journal\none\ntwo\n", nil
+		case strings.Contains(script, "aiman-feed"):
+			return "INSTALLED=1\nDRIVER=nohup\nACTIVE=active\nPID=" + itoaPID() + "\nVERSION=aiman v0.47.0\n", nil
 		case strings.Contains(script, "aiman-gateway"):
 			return "INSTALLED=1\nDRIVER=systemd\nACTIVE=active\nPID=" + itoaPID() + "\nVERSION=aiman-gateway v0.47.0\n", nil
 		default:
@@ -59,7 +61,7 @@ func TestHostDaemonsReadsCachesAndLogs(t *testing.T) {
 		}
 	}
 	rows, err := h.Daemons(context.Background(), false)
-	if err != nil || len(rows) != 3 {
+	if err != nil || len(rows) != 4 {
 		t.Fatalf("rows %+v err %v", rows, err)
 	}
 	if s := rows[0]; s.Kind != "serve" || s.PID != os.Getpid() || s.RSSBytes == 0 || s.StartedAt.IsZero() || time.Since(s.StartedAt) < 0 {
@@ -70,6 +72,9 @@ func TestHostDaemonsReadsCachesAndLogs(t *testing.T) {
 	}
 	if rows[2].Installed {
 		t.Fatalf("trigger row %+v", rows[2])
+	}
+	if f := rows[3]; f.Kind != "feed" || !f.Installed || f.Driver != "nohup" || f.Active != "active" || f.PID != os.Getpid() {
+		t.Fatalf("feed row %+v", f)
 	}
 	n := calls.Load()
 	if _, err := h.Daemons(context.Background(), false); err != nil || calls.Load() != n {

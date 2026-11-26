@@ -27,17 +27,20 @@ const (
 	// for approval, is blocked, failed vetting, or (with no session) a
 	// re-scan marked it stale.
 	NotifyHarnessImage NotifyKind = "harness_image"
+	// NotifyFeedAction is a host-level event with no session: the event feed
+	// proposed an action that waits for the operator.
+	NotifyFeedAction NotifyKind = "feed_action"
 )
 
 // AllNotifyKinds returns the supported notification kinds in order.
 func AllNotifyKinds() []NotifyKind {
-	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources, NotifyHostPressure, NotifyHarnessImage}
+	return []NotifyKind{NotifyWaitingInput, NotifyEnded, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyAgentUpdate, NotifyHostUpdate, NotifyResources, NotifyHostPressure, NotifyHarnessImage, NotifyFeedAction}
 }
 
 // NeedsYou reports whether the user must act.
 func NeedsYou(k NotifyKind) bool {
 	switch k {
-	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources, NotifyHostPressure, NotifyHarnessImage:
+	case NotifyWaitingInput, NotifyError, NotifyCIEscalation, NotifyReviewDone, NotifyResources, NotifyHostPressure, NotifyHarnessImage, NotifyFeedAction:
 		return true
 	default:
 		return false
@@ -67,6 +70,8 @@ func EventLabel(k NotifyKind) string {
 		return "host pressure"
 	case NotifyHarnessImage:
 		return "harness image"
+	case NotifyFeedAction:
+		return "feed action"
 	default:
 		return string(k)
 	}

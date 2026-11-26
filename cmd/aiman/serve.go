@@ -202,6 +202,9 @@ func runServe() error {
 	if closeHarness := wireHarness(ctx, srv, cfg, dir); closeHarness != nil {
 		defer closeHarness()
 	}
+	if closeFeed := wireFeed(ctx, srv, cfg, dir, db); closeFeed != nil {
+		defer closeFeed()
+	}
 	// SIGUSR1 (aiman host dump) and a run at the in-flight cap write a dump
 	// here, where the journal cannot drop it.
 	go srv.HandleDumpSignals(ctx, filepath.Join(dir, "logs"))

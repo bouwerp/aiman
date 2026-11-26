@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/bouwerp/aiman/internal/agentjob"
 )
 
 // ScanStageSBOM re-scans a stored SBOM: Trivy vulnerabilities and OSV MAL ids.
@@ -45,11 +47,8 @@ type Scanner interface {
 	Scan(ctx context.Context, req ScanRequest) (StageResult, error)
 }
 
-// Mount is one bind mount of a scanner container.
-type Mount struct {
-	Host, Container string
-	ReadOnly        bool
-}
+// Mount is one bind mount of a scanner or review container.
+type Mount = agentjob.Mount
 
 // ContainerOptions describe one hardened scanner container.
 type ContainerOptions struct {

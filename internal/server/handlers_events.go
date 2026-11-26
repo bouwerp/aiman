@@ -59,6 +59,9 @@ type SessionEvent struct {
 	Text string `json:"text,omitempty"`
 	// Step names the overview step that changed on overview.
 	Step string `json:"step,omitempty"`
+	// Action and Batch name the feed action or batch that changed on feed.
+	Action int64 `json:"action,omitempty"`
+	Batch  int64 `json:"batch,omitempty"`
 }
 
 // isSessionEvents reports whether a request opens the event stream, which like

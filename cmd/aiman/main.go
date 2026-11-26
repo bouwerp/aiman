@@ -385,6 +385,11 @@ func runSubcommand(rest []string) (handled bool, err error) {
 		return true, runSlack(context.Background(), rest[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "harness":
 		return true, runHarness(rest[1:])
+	case "feed":
+		if len(rest) > 1 && rest[1] == "collect" {
+			return true, runFeedCollect(rest[2:])
+		}
+		return true, runFeed(rest[1:], os.Stdout)
 	}
 	return false, nil
 }
