@@ -2675,8 +2675,12 @@ components:
         Operator only (needs_operator for a session). artifact.share {id,
         emails?, domains?} and artifact.unshare {id, emails?, domains?, all?}
         answer {type: artifact_share, share: {emails, domains}};
-        artifact.delete {id} answers {type: artifact_deleted, id}. Off the
-        device allowlist.
+        artifact.delete {id} answers {type: artifact_deleted, id}. An
+        unknown id is not_found. Each success records artifact.shared (id,
+        action, counts; never addresses) or artifact.deleted (id) on the
+        ledger id artifacts. Share writes meta.json only; Access admits
+        only the viewers aiman artifact setup gave it. Off the device
+        allowlist.
       required: [type]
       properties:
         type:
