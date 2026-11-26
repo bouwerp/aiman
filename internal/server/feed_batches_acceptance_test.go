@@ -1,5 +1,3 @@
-//go:build feedaccept_batches
-
 package server
 
 import (
