@@ -505,3 +505,29 @@ Order: zone id → bucket (create if missing) → r2.dev off → Access policy `
 Access admits the policy's viewers. Sharing with someone outside it needs `aiman artifact setup` again with that email (the operator's step; share never calls Cloudflare). Every Google account that signs in takes a Zero Trust seat.
 
 CLI: `aiman artifact setup [--account ID] [--zone Z] [--host H] [--bucket B] [--team T] [--idp ID] [--owner EMAIL …] [--viewer EMAIL …] [--viewer-domain D …]` reads the API token from stdin, or `--cf-oauth` takes the `cf` CLI's OAuth token from `~/.config/cloudflare/config/default.json`. Missing flags come from the `artifacts` config. It prints the AUD and app id. `aiman artifact setup --host-key` reads `{"access_key_id","secret_access_key"}` from stdin and writes `~/.aiman/artifacts-r2.json` (0600); the operator makes that key in the dashboard (R2 → Manage API tokens, Object Read & Write, this bucket only).
+
+### Host credentials: `cf` OAuth and the REST object API (piece A2)
+
+Operator decision 2026-11-26 ("option 2"): hosts publish with the `cf` CLI's OAuth login instead of a bucket-scoped R2 key. Accepted risks: a host holds a token that can also change the Worker and Access; R2's REST object API ignores `If-None-Match` and `If-Match` (tested: both PUTs answered 200 and overwrote), so overwrite and race protection is serve's, not R2's.
+
+```go
+// TokenSource returns a bearer token for the Cloudflare API.
+type TokenSource func(ctx context.Context) (string, error)
+
+// CFOAuthToken reads oauth_token and expiration_time from the cf CLI's
+// config file (~/.config/cloudflare/config/default.json). Within 2 minutes
+// of expiry (or past it) it calls refresh (serve: runs `cf auth whoami`,
+// which renews the token) and reads the file again. It never logs the token.
+func CFOAuthToken(path string, refresh func(ctx context.Context) error) TokenSource
+
+// NewCFObjects is a Bucket over the REST object API:
+// <base>/accounts/<account>/r2/buckets/<bucket>/objects/<key>.
+// It emulates Cond: IfNoneMatch reads the key first and refuses with
+// ErrPrecondition when it exists; IfMatch reads the key's ETag first and
+// refuses on a mismatch. Get returns the ETag header without quotes
+// normalised to the quoted form "<hex>". List pages with ?prefix=&cursor=.
+func NewCFObjects(base, account, bucket string, token TokenSource, hc *http.Client) *CFObjects
+```
+
+- The emulated checks race with other writers. Serve is the only writer of an artifact (one host owns it), and `Publisher` serialises Publish, Share and Delete per artifact id with an in-process lock, so the check and the write cannot interleave within serve.
+- Wiring: `artifacts.auth` is `cf_oauth` (REST object API, `cf` must be on PATH) or `r2_key` (S3 API with `~/.aiman/artifacts-r2.json`, the default when that file exists). With `cf_oauth` and no `cf` config file, the RPCs answer `unavailable`.
