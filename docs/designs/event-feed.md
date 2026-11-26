@@ -1,6 +1,6 @@
 # event-feed: one agent reads your event streams and proposes actions
 
-**Revision:** 12 · **Size:** project · **Status:** approved 2026-11-26
+**Revision:** 12 · **Size:** project · **Status:** as built 2026-11-26
 **Task:** session `event-feed-with-actions` (operator request 2026-11-26) · **Spec:** `docs/specs/event-feed.md` (written from this page after approval)
 
 **Legend:** green = new, amber = changed, red dashed = removed. Every diagram uses these three classes:
@@ -659,3 +659,18 @@ Phase 2 (a new design round), in this order: first the wider actions `steer_sess
 4. Where continuity comes from without a live session (`memory.md`, `decisions.md`, summaries) and how serve limits what the agent writes to memory.
 5. Why at most one batch is in flight and what happens to a failed batch.
 6. What each phase 1 action kind does on approval, and where you approve it: TUI home panel, Feed page, phone or CLI.
+
+## Deviations from the approved design
+
+- **Two follow-up pieces.** P3c added GitHub PR enrichment (title, body, changed paths, author), notification paging and a `session.events_since` `next` that is the last row scanned. P3d made the Slack source re-read the member's own threads every 5 minutes, added `slack.Message.LatestReply`, and forgets threads idle for 14 days.
+- **Ownership.** P7 added the config types (`config.FeedConfig`) and `domain.NotifyFeedAction`; `feed.act` also has `forget_memory` and `unmute`. Executors live in `internal/feed/act.go`.
+- **To-do author.** `todo_add` writes as `aiman`; there is no `feed` author.
+- **Slack drafts.** `slack.Client.Draft` returns no permalink, so an approved draft's result is `draft saved: slack draft <id> in <channel> (Drafts & Sent)`. Without a Slack login on the host, approving a draft is refused.
+- **GitHub ids.** `ExternalID` is `<notification id>@<updated_at>`, so an update of the same notification is a new event in the same thread.
+- **Own Slack messages.** The member's own messages outside a thread are dropped; own replies inside a thread are kept with `Own`.
+- **Digests.** Digests are stored in serve's `feed_digests` with negative ids; the agent's digest lines are kept per batch in `~/.aiman/feed/digest/<batch>.json`.
+- **Cursors.** `Writer.Append` deletes the cursor keys a source leaves out of its returned map.
+- **Gateway.** `feed.act` needed a small routing change in `rpc.go`; an out-of-range `option` is refused with 400 `invalid_params`; the `feed_action` push goes to devices subscribed to `waiting_input`.
+- **Agent job.** `agentjob.Container` has `Workdir`; `HostCredentials` exists as a func and as the struct `CredentialReader`.
+- **Tests.** Acceptance tests carried per-piece build tags (`feedaccept_<piece>`) while pieces landed; the final commit removed them.
+- **Phone.** P12 landed in the aiman-phone repo on its own `event-feed-with-actions` branch.
