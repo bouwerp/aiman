@@ -362,6 +362,8 @@ func (m *Model) routeRemoteServiceMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.routeAgentUpdatesMsg(msg)
 	case overviewMsg, overviewStartedMsg, overviewStatusMsg:
 		return m.routeOverviewMsg(msg)
+	case feedReadMsg, feedActedMsg, feedPageMsg, feedMemoryMsg:
+		return m.routeFeedMsg(msg)
 	case gatewayPairMsg, gatewayPairTickMsg:
 		return m.routeGatewayPairMsg(msg)
 	case githubReleaseMsg:

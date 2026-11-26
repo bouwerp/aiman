@@ -27,13 +27,13 @@ func (w *recordingServeConfigWriter) WriteFile(_ context.Context, path string, c
 	return nil
 }
 
-func TestDaemonListHasServeAndTriggerPerRemote(t *testing.T) {
+func TestDaemonListHasEveryDaemonPerRemote(t *testing.T) {
 	cfg := twoRemoteCfg()
 	m := NewModel(cfg, nil, nil, &mockSessionRepo{}, nil, nil, nil)
 	m.applyRemoteFilter()
 	items := m.daemonList.Items()
-	if len(items) != 6 {
-		t.Fatalf("len=%d want 6 (2 remotes × serve+trigger+gateway)", len(items))
+	if len(items) != 8 {
+		t.Fatalf("len=%d want 8 (2 remotes × serve+trigger+gateway+feed)", len(items))
 	}
 	first, ok := items[0].(daemonItem)
 	if !ok || first.daemon.Kind != string(remotesvc.KindServe) {
