@@ -42,6 +42,14 @@ const (
 	// EventDesignPublished records a design page push: revision, url and the
 	// Decisions-table triage counts.
 	EventDesignPublished EventKind = "design.published"
+	// EventArtifactPublished records an artifact version: id, version, the
+	// file count (kit included) and the caller's bytes.
+	EventArtifactPublished EventKind = "artifact.published"
+	// EventArtifactShared records an operator share or unshare: id, the
+	// action and the share list's email and domain counts, never addresses.
+	EventArtifactShared EventKind = "artifact.shared"
+	// EventArtifactDeleted records an operator delete: id.
+	EventArtifactDeleted EventKind = "artifact.deleted"
 	// EventConsultFinished records a consult's report on its parent's ledger:
 	// objection counts by severity and the verdict.
 	EventConsultFinished EventKind = "consult.finished"
@@ -166,6 +174,10 @@ const HarnessImageLedger = "harness-images"
 // AWSLoginLedger is the ledger id of the aws.login_* rows. A sign-in belongs to
 // the host and only the operator may start one, so it has no session of its own.
 const AWSLoginLedger = "aws-login"
+
+// ArtifactsLedger is the ledger id of the operator's artifact share and
+// delete rows. Those actions are host-wide and belong to no session.
+const ArtifactsLedger = "artifacts"
 
 // OverviewLedger is the ledger id of the overview.* rows. A run covers the
 // whole host, so it has no session of its own.

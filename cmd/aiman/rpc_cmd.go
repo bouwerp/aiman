@@ -16,6 +16,8 @@ import (
 // example todo.mirror) must never be added.
 var rpcMethods = map[string]bool{
 	"session.register":    true,
+	"artifact.list":       true,
+	"artifact.get":        true,
 	"session.move":        true,
 	"session.rename":      true,
 	"session.get":         true,

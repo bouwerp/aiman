@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bouwerp/aiman/internal/agentupdate"
+	"github.com/bouwerp/aiman/internal/artifact"
 	"github.com/bouwerp/aiman/internal/cgroup"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/coordinator"
@@ -181,6 +182,8 @@ type Server struct {
 	handovers *handoverchild.Manager
 	// designer publishes design pages; nil until SetDesignPublisher.
 	designer *design.Publisher
+	// artifacts publishes artifact pages; nil until SetArtifactPublisher.
+	artifacts *artifact.Publisher
 	// transcripts opens vendor transcripts; nil until SetTranscripts.
 	transcripts TranscriptSource
 	// trPins are the readers session.transcript opened lately, which the
@@ -519,6 +522,8 @@ func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 		return s.dispatchHarnessShare(ctx, req)
 	case "design.publish":
 		return s.handleDesignPublish(ctx, req)
+	case "artifact.publish", "artifact.list", "artifact.get", "artifact.share", "artifact.unshare", "artifact.delete":
+		return s.dispatchArtifact(ctx, req)
 	case "review.reveal", "review.post", "review.refresh", "review.run", "review.debug", "review.coverage",
 		"review.fix", "review.push", "review.assess", "review.approve":
 		return s.dispatchReview(ctx, req)

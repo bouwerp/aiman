@@ -44,6 +44,8 @@ type Config struct {
 	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
+	// Artifacts configures the artifact host and its R2 bucket.
+	Artifacts ArtifactsConfig `yaml:"artifacts,omitempty"`
 	// Review configures PR review sessions.
 	Review ReviewConfig `yaml:"review,omitempty"`
 	// CI configures serve's PR watcher.
@@ -99,6 +101,8 @@ type ServeConfig struct {
 	Sessions SessionsConfig `yaml:"sessions,omitempty"`
 	// Design configures where coordinator design pages are published.
 	Design DesignConfig `yaml:"design,omitempty"`
+	// Artifacts configures the artifact host and its R2 bucket.
+	Artifacts ArtifactsConfig `yaml:"artifacts,omitempty"`
 	// Review configures PR review sessions.
 	Review ReviewConfig `yaml:"review,omitempty"`
 	// CI configures serve's PR watcher.
@@ -506,6 +510,42 @@ func (r ReviewConfig) FixTimeoutOrDefault() time.Duration {
 // unset.
 const DefaultDesignDir = "docs/designs"
 
+// Artifact credential kinds for ArtifactsConfig.Auth.
+const (
+	ArtifactsAuthCFOAuth = "cf_oauth" // the cf CLI's OAuth login, R2 REST object API
+	ArtifactsAuthR2Key   = "r2_key"   // a bucket-scoped key, R2 S3 API
+)
+
+// ArtifactsConfig names where artifact pages are published. Credentials are
+// not here: they live on the host only, in ~/.aiman/artifacts-r2.json or the
+// cf CLI's config.
+type ArtifactsConfig struct {
+	// Host is the site that serves artifacts, such as aiman.fyi.
+	Host string `yaml:"host,omitempty"`
+	// AccountID is the Cloudflare account holding the bucket.
+	AccountID string `yaml:"account_id,omitempty"`
+	// Bucket is the R2 bucket name.
+	Bucket string `yaml:"bucket,omitempty"`
+	// Owners are the emails that may view every artifact. The Worker reads
+	// them; on a host they are informational.
+	Owners []string `yaml:"owners,omitempty"`
+	// Team is the Zero Trust team domain (<team>.cloudflareaccess.com, or
+	// just <team>); aiman artifact setup reads it when --team is not given.
+	Team string `yaml:"team,omitempty"`
+	// IdentityProvider is the Access identity provider id (Google) for
+	// aiman artifact setup when --idp is not given.
+	IdentityProvider string `yaml:"identity_provider,omitempty"`
+	// Auth is ArtifactsAuthCFOAuth or ArtifactsAuthR2Key. Unset picks r2_key
+	// when the host has its R2 key file, else cf_oauth when it has the cf
+	// CLI's config.
+	Auth string `yaml:"auth,omitempty"`
+}
+
+// Configured reports whether host, account and bucket are all set.
+func (a ArtifactsConfig) Configured() bool {
+	return strings.TrimSpace(a.Host) != "" && strings.TrimSpace(a.AccountID) != "" && strings.TrimSpace(a.Bucket) != ""
+}
+
 // DesignConfig names the docs repository design pages are published to.
 type DesignConfig struct {
 	// Repo is the owner/name of the docs repository, or a git URL or local
@@ -544,6 +584,7 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Overview:      c.Overview,
 		Sessions:      c.Sessions,
 		Design:        c.Design,
+		Artifacts:     c.Artifacts,
 		Review:        c.Review,
 		CI:            c.CI,
 		Repos:         c.Repos,

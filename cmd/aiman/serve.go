@@ -348,6 +348,11 @@ func runServe() error {
 	srv.SetDaemonControl(newHostDaemons(hostUpdates, version, home))
 
 	srv.SetDesignPublisher(&design.Publisher{Cfg: cfg.Design, Home: home, Run: design.ExecRun})
+	if pub, why := newServeArtifactPublisher(cfg.Artifacts, dir, home, db.DB(), srv.ArtifactCanWrite); pub != nil {
+		srv.SetArtifactPublisher(pub)
+	} else if cfg.Artifacts.Configured() {
+		log.Printf("artifacts: publishing off: %s", why)
+	}
 	srv.SetTranscripts(server.NewTranscriptSource(home))
 
 	childTracker := &coordinator.Tracker{
