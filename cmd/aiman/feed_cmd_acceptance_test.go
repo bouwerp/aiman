@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p9
-
 package main
 
 import (
