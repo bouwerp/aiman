@@ -15,6 +15,7 @@ const (
 	KindServe   Kind = "serve"
 	KindTrigger Kind = "trigger"
 	KindGateway Kind = "gateway"
+	KindFeed    Kind = "feed"
 
 	// OpTimeout covers remote install/update (curl the GitHub binary) plus
 	// systemctl. The default SSH call deadline is too short for that.
@@ -27,6 +28,8 @@ func (k Kind) Unit() string {
 		return "aiman-trigger"
 	case KindGateway:
 		return "aiman-gateway"
+	case KindFeed:
+		return "aiman-feed"
 	default:
 		return "aiman-serve"
 	}
@@ -49,6 +52,8 @@ func (k Kind) ExecLine() string {
 		return "%h/.local/bin/aiman-trigger"
 	case KindGateway:
 		return "%h/.local/bin/aiman-gateway"
+	case KindFeed:
+		return "%h/.local/bin/aiman feed collect"
 	default:
 		return "%h/.local/bin/aiman serve"
 	}
@@ -60,6 +65,8 @@ func (k Kind) LogFile() string {
 		return "$HOME/.aiman/trigger.log"
 	case KindGateway:
 		return "$HOME/.aiman/gateway.log"
+	case KindFeed:
+		return "$HOME/.aiman/feed.log"
 	default:
 		return "$HOME/.aiman/serve.log"
 	}
@@ -71,6 +78,8 @@ func (k Kind) PidFile() string {
 		return "$HOME/.aiman/trigger.pid"
 	case KindGateway:
 		return "$HOME/.aiman/gateway.pid"
+	case KindFeed:
+		return "$HOME/.aiman/feed.pid"
 	default:
 		return "$HOME/.aiman/serve.pid"
 	}
@@ -85,6 +94,8 @@ func (k Kind) procPattern() string {
 		return "[a]iman-trigger"
 	case KindGateway:
 		return "^([^ ]*/)?aiman-gateway( |$)"
+	case KindFeed:
+		return "[a]iman feed collect"
 	default:
 		return "[a]iman serve"
 	}
@@ -254,7 +265,7 @@ true
 func UpdateScript(k Kind, tag string) string {
 	script := "set -e\n" + k.InstallPipeAt(tag) + "\n" + StartScript(k)
 	if k == KindServe {
-		script += gatewayLockstep(tag)
+		script += gatewayLockstep(tag) + feedLockstep()
 	}
 	return script
 }
@@ -276,6 +287,20 @@ func gatewayLockstep(tag string) string {
   fi
 fi
 `, k.Binary(), k.Binary(), k.procPattern(), k.InstallPipeAt(tag), StartScript(k))
+}
+
+// feedLockstep restarts the feed collector after serve's update, only when it
+// was running. It is the same binary serve's install just replaced, so no
+// download is needed. The subshell keeps the start script's exports and set -e
+// to itself.
+func feedLockstep() string {
+	k := KindFeed
+	return fmt.Sprintf(`if pgrep -f '%s' >/dev/null; then
+  (
+%s
+  )
+fi
+`, k.procPattern(), StartScript(k))
 }
 
 func ProbeScript(k Kind) string {
@@ -390,8 +415,11 @@ done`, k.Unit(), rotateLog(k), cmd, k.LogFile())
 func nohupStart(k Kind) string {
 	bin := "$HOME/.local/bin/" + k.Binary()
 	cmd := bin
-	if k == KindServe {
+	switch k {
+	case KindServe:
 		cmd = bin + " serve"
+	case KindFeed:
+		cmd = bin + " feed collect"
 	}
 	return fmt.Sprintf(`mkdir -p "$HOME/.aiman"
 if [ -f %[1]s ]; then kill "$(cat %[1]s)" 2>/dev/null || true; fi
