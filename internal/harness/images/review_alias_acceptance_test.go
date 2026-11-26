@@ -1,5 +1,3 @@
-//go:build feedaccept
-
 package images_test
 
 import (

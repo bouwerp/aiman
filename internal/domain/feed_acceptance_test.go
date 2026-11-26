@@ -1,5 +1,3 @@
-//go:build feedaccept
-
 package domain_test
 
 import (

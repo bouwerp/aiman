@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p3c
-
 package server
 
 import (

@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p11
-
 package gateway
 
 import (

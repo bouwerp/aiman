@@ -1,5 +1,3 @@
-//go:build feedaccept
-
 package agentjob_test
 
 import (

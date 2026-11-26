@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p6
-
 package feed_test
 
 import (
@@ -187,8 +185,8 @@ func TestFoldDigests(t *testing.T) {
 	for i := int64(2); i <= 26; i++ { // 25 ambient messages in C7
 		in = append(in, ambient(i, "C7", fmt.Sprintf("c7mark-%02d:", i)+strings.Repeat("y", 1000)))
 	}
-	in = append(in, ev(27, func(e *domain.FeedEvent) { e.Class = domain.FeedEventClass("direct") }))
-	in = append(in, ambient(28, "C8", "c8mark-28"), ambient(29, "C8", "c8mark-29"))
+	in = append(in, ev(27, func(e *domain.FeedEvent) { e.Class = domain.FeedEventClass("direct") }),
+		ambient(28, "C8", "c8mark-28"), ambient(29, "C8", "c8mark-29"))
 
 	out := feed.FoldDigests(in)
 

@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p4
-
 package remotesvc
 
 import (

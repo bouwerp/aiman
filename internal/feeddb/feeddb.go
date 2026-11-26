@@ -353,7 +353,7 @@ func (r *Reader) ByIDs(ctx context.Context, ids []int64) ([]domain.FeedEvent, er
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT `+eventCols+` FROM events WHERE id IN (`+marks+`) ORDER BY id ASC`, args...)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+eventCols+` FROM events WHERE id IN (`+marks+`) ORDER BY id ASC`, args...) //nolint:gosec // G202: the query adds only ? placeholders
 	if err != nil {
 		return nil, err
 	}

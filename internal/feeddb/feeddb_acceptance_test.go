@@ -1,5 +1,3 @@
-//go:build feedaccept
-
 package feeddb_test
 
 import (

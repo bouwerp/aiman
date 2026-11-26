@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p3a
-
 package feedcollect_test
 
 import (
@@ -363,14 +361,6 @@ func ghBody(t *testing.T, ns ...map[string]any) string {
 		t.Fatal(err)
 	}
 	return string(b)
-}
-
-func byExternal(evs []domain.FeedEvent) map[string]domain.FeedEvent {
-	out := map[string]domain.FeedEvent{}
-	for _, ev := range evs {
-		out[ev.ExternalID] = ev
-	}
-	return out
 }
 
 func TestGitHubSourceThreadsAndUrgency(t *testing.T) {

@@ -1,5 +1,3 @@
-//go:build feedaccept || feedaccept_p10
-
 package config
 
 import (

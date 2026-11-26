@@ -57,7 +57,6 @@ func (s *Server) handleEventsSince(ctx context.Context, req Request) Response {
 		limit = eventsSinceMaxLimit
 	}
 	events := []eventsSinceEvent{}
-	next := params.AfterRowID
 	if params.AfterRowID < 0 {
 		last, err := reader.LastEventRowID(ctx)
 		if err != nil {
@@ -83,6 +82,5 @@ func (s *Server) handleEventsSince(ctx context.Context, req Request) Response {
 			At: row.At.Format(time.RFC3339Nano), Actor: row.Actor, Kind: row.Kind, Payload: payload,
 		})
 	}
-	next = scanned
-	return Response{ID: req.ID, Result: map[string]any{"type": "session_events_since", "events": events, "next": next}}
+	return Response{ID: req.ID, Result: map[string]any{"type": "session_events_since", "events": events, "next": scanned}}
 }
