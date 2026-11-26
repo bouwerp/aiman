@@ -468,3 +468,40 @@ Share and Delete: R2 first (`meta.json` with `If-Match`), then the store. Delete
 | `artifact.delete` | `id` | `{"type":"artifact_deleted","id"}` | operator |
 
 Error codes: `artifact_conflict` (ErrConflict), `invalid_params` (ErrInvalid, ErrLimits, a path outside the session's directory), `session_scope` (ErrNotOwner), `needs_operator`, `not_found`, `unavailable` (no publisher wired). `page` and every `from` resolve like `readConfined` (symlinks followed, inside the working directory or worktree) but for any file type. `page` is published as `index.html`; each other file at its `path`, else its path relative to the page's directory.
+
+### Setup (piece C)
+
+```go
+type CloudflareAPI struct {
+    Base  string // "https://api.cloudflare.com/client/v4"
+    Token string // never logged, never in an error
+    HTTP  *http.Client
+}
+
+type SetupConfig struct {
+    AccountID        string
+    Zone             string   // "aiman.fyi"
+    Host             string   // "aiman.fyi"
+    Bucket           string   // "aiman-artifacts"
+    TeamDomain       string   // "<team>.cloudflareaccess.com"
+    IdentityProvider string   // Access IdP id (Google)
+    Owners           []string // Worker OWNERS, lower case
+    Viewers          []string // Access policy emails (owners plus anyone shared with)
+    ViewerDomains    []string // Access policy email domains
+}
+
+type SetupResult struct {
+    AppID    string
+    AUD      string
+    PolicyID string
+}
+
+// Setup is idempotent: it finds by name before it creates.
+func Setup(ctx context.Context, api *CloudflareAPI, cfg SetupConfig, log io.Writer) (SetupResult, error)
+```
+
+Order: zone id → bucket (create if missing) → r2.dev off → Access policy `aiman-artifacts-viewers` → Access app `aiman artifacts` (destinations `<host>/a`, `<host>/a/*`; `allowed_idps` the IdP; `auto_redirect_to_identity`; cookie `SameSite=None`, `HttpOnly`; 24h) → Worker `aiman-artifacts` (multipart, `main_module` `worker.js`, bindings `BUCKET`, `ARTIFACT_HOST`, `OWNERS`, `TEAM_DOMAIN`, `POLICY_AUD`) → `workers.dev` and previews off → route `<host>/a*` → proxied `AAAA <host> 100::` when the zone has no record for the host. Errors carry Cloudflare's message, never the token.
+
+Access admits the policy's viewers. Sharing with someone outside it needs `aiman artifact setup` again with that email (the operator's step; share never calls Cloudflare). Every Google account that signs in takes a Zero Trust seat.
+
+CLI: `aiman artifact setup [--account ID] [--zone Z] [--host H] [--bucket B] [--team T] [--idp ID] [--owner EMAIL …] [--viewer EMAIL …] [--viewer-domain D …]` reads the API token from stdin, or `--cf-oauth` takes the `cf` CLI's OAuth token from `~/.config/cloudflare/config/default.json`. Missing flags come from the `artifacts` config. It prints the AUD and app id. `aiman artifact setup --host-key` reads `{"access_key_id","secret_access_key"}` from stdin and writes `~/.aiman/artifacts-r2.json` (0600); the operator makes that key in the dashboard (R2 → Manage API tokens, Object Read & Write, this bucket only).
