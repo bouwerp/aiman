@@ -70,7 +70,7 @@ flowchart LR
 | list_channel_members | `aiman slack members --channel C [--cursor]` | `conversations.members` + `users.info` | new |
 | send_message | `aiman slack send ... [--broadcast] [--no-unfurl]` | `chat.postMessage` with `markdown_text` alone (it conflicts with `text`); `reply_broadcast`; `unfurl_links`/`unfurl_media` false | changed |
 | schedule_message | `aiman slack schedule --channel C --at <RFC3339\|+2h> [--thread ts] --text ...`; `schedule list`, `schedule cancel <id>` | `chat.scheduleMessage`, `chat.scheduledMessages.list`, `chat.deleteScheduledMessage` | new |
-| send_message_draft | none | no public API | not possible |
+| send_message_draft | `draft` | `drafts.create` (undocumented, accepts a user token; list, update and delete do not) | plain text, one draft per channel |
 | add_reaction / get_reactions | `react` / `reactions --channel C --ts T` | `reactions.add` / `reactions.get` | get is new |
 | create_conversation | `aiman slack create-channel <name> [--private] [--invite U,...]`; `aiman slack dm U[,U...]` | `conversations.create` + `conversations.invite`; `conversations.open` | new |
 | read_list | `aiman slack list read <id> [--format csv\|markdown\|json] [--schema] [--cursor]` | `slackLists.items.list` with `include_list=true` (the schema source), `slackLists.items.info` | new |
