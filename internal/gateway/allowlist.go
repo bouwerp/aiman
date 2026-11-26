@@ -23,6 +23,7 @@ var (
 		"repo.list", "host.stats", "host.version", "host.daemons", "resources.get",
 		"aws.status", "aws.login_status", "aws.log",
 		"harness.list", "harness.status", "harness.result", "harness.image_status",
+		"feed.status", "feed.actions", "feed.events", "feed.memory",
 	}
 	// deviceWriteMethods change state but cannot publish outside the host.
 	// todo.mirror is left out: it stands for the agent's own task list, which
@@ -31,7 +32,11 @@ var (
 	// without an explicit discard. todo.update and todo.remove on a gate item
 	// also need allow_destructive (gate_todo.go). todo.approve_design and
 	// todo.approve_review stay here because serve accepts them only from the
-	// list's own session, and a device has no caller.
+	// list's own session, and a device has no caller. feed.act is here because
+	// dismiss, forget_memory and unmute only change the feed; an approve passes
+	// without allow_destructive only for a safe kind (gate_feed.go): a
+	// slack_draft writes a draft only the member can see and sends nothing, a
+	// todo_add adds a to-do, and a read opens nothing on the host.
 	deviceWriteMethods = []string{
 		"session.prompt", "session.rename", "session.move",
 		"session.terminate",
@@ -40,6 +45,7 @@ var (
 		"todo.ensure_done", "todo.mark_met", "todo.gate",
 		"todo.approve_design", "todo.approve_review",
 		"ci.watch",
+		"feed.act",
 		"push.register", "push.unregister",
 	}
 	// deviceDestructiveMethods kill terminals, drop sessions, post to GitHub,

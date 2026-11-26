@@ -4316,9 +4316,13 @@ components:
       properties:
         session:
           type: string
+          description: Empty for a feed_action push.
         host:
           type: string
         url:
           type: string
-          description: "Deep link `aimanphone://h/<host>/s/<session>`."
+          description: >-
+            Deep link `aimanphone://h/<host>/s/<session>`; for kind
+            feed_action, whose session is empty, `aimanphone://h/<host>/feed`
+            (the Feed tab).
 
