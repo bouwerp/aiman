@@ -470,3 +470,11 @@ These names and rules are part of the contract. The acceptance tests use them.
 - The Slack source (P3b) joins the `sources` slice in `runFeedCollect` where a comment marks the place.
 - Open gaps, owned by the follow-up piece P3c: GitHub enrichment (PR title, body and changed paths) is not done; only the first 50 notifications of a poll are read; `session.events_since` with `kinds` sets `next` to the last matching row, so the ledger cursor re-scans rows that do not match. P3c pages the notifications, enriches PR events, and makes `next` the last row scanned.
 - `feeddb.Writer` cannot read health back, so the collector keeps `last_ok` in memory; `Health.Calls` counts polls, not API calls. GitHub events have no `Actor`, so a sender mute never matches them.
+
+**As landed by P3b**
+
+- `SlackOptions.Sleep` is `func(ctx context.Context, d time.Duration) error` (the acceptance test's form).
+- A group DM is known by the im,mpim listing (or an `mpdm-` name); `slack.Channel` has no `is_mpim`.
+- `FeedSlackConfig` yaml tags are `exclude`, `bots`, `calls_per_minute`.
+- Tier 1 degradation is the budget's natural order (DMs and the mention search first); there is no separate detection.
+- Open gaps, owned by follow-up P3d: a new reply to a thread whose parent is older than the conversation cursor is seen only through the mention search, because `slack.Message` has no `latest_reply` and history with `oldest` does not return the old parent. P3d adds `LatestReply` (`latest_reply,omitempty`) to `slack.Message` and polls the replies of threads the member is in (thread cursors `t:…`, last 14 days) within the replies budget; it also adds `feeddb.Writer.DeleteCursors` and prunes thread cursors older than 14 days.
