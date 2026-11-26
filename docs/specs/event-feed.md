@@ -462,3 +462,11 @@ These names and rules are part of the contract. The acceptance tests use them.
 - `FoldDigests` gives a digest the last folded event's id; P7 replaces it with the negative `feed_digests` id when it stores the digest.
 - A digest's `ThreadKey` is `slack:<channel>`; its body lines are `[<event id>] <actor>: <text>`, so the agent can cite one message in it.
 - `brief.go` exports `DigestKind`, `MaxOptions`, `MaxMemoryOps`, `MaxMemoryBullet`, `MaxMemoryBytes`, `MaxActionText`.
+
+**As landed by P3a**
+
+- `cmd/aiman/feed_collect.go` reads `feed.enabled` and `feed.retention` with a local struct; P10 replaces it with `config.FeedConfig`.
+- `main.go` routes only `feed collect`; P9 adds the other `feed` subcommands in the same `case "feed"`.
+- The Slack source (P3b) joins the `sources` slice in `runFeedCollect` where a comment marks the place.
+- Open gaps, owned by the follow-up piece P3c: GitHub enrichment (PR title, body and changed paths) is not done; only the first 50 notifications of a poll are read; `session.events_since` with `kinds` sets `next` to the last matching row, so the ledger cursor re-scans rows that do not match. P3c pages the notifications, enriches PR events, and makes `next` the last row scanned.
+- `feeddb.Writer` cannot read health back, so the collector keeps `last_ok` in memory; `Health.Calls` counts polls, not API calls. GitHub events have no `Actor`, so a sender mute never matches them.
