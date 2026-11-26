@@ -486,6 +486,43 @@ aiman slack dm U1[,U2]
 - `wait` returns the next message in the thread that is not from the approving member, or exits `slack_timeout`.
 - A host can make agents read-only with `slack.writes: off` in `~/.aiman/config.yaml`; writes then fail with `slack_writes_off`. Tell the operator if you need one.
 
+## Artifacts
+
+Publish a report, dashboard, diagram or explainer for the operator as a private web page. Do not leave it as a loose file on the host.
+
+```bash
+aiman artifact publish report/index.html --title "Load test" [--file chart.svg] [--file data/x.json=out/x.json] [--theme plex|grotesk|signal]
+aiman artifact publish report/index.html --id ID --expect-version 1
+aiman artifact list
+aiman artifact get ID
+```
+
+- Give the operator the URL from the result (`https://<host>/a/<id>/`). They sign in with Google. `/a/<id>/v/<n>/` pins one version.
+- The page is published as `index.html`. Files must resolve inside your worktree. Any file type is allowed.
+- `--id` adds a version to an artifact you own, or one a session below you owns. `--expect-version N` fails with `artifact_conflict` when another write landed. Re-read, then retry.
+- Limits: 255 files (the kit does not count), 25 MiB each, 64 MiB in all. A path under `kit/` is refused.
+- `share`, `unshare`, `delete` and `setup` are the operator's. A session gets `needs_operator`. Tell the operator if you need one. `unavailable` means this host has no artifact publishing set up.
+
+Page rules (the page runs in a CSP sandbox with an opaque origin):
+
+- No `localStorage`, `sessionStorage`, IndexedDB or cookies.
+- A page cannot `fetch` its own files. Inline the data, or load it with `<script>`, `<img>` or `<link>`.
+- Outside code only from cdnjs, jsdelivr and unpkg. Never put a secret in a page: the page is stored in R2 and the operator may share it.
+
+Theme kit (copied into every version):
+
+```html
+<link rel="stylesheet" href="kit/theme.css">
+<script src="kit/kit.js"></script>
+```
+
+- Load `kit.js` as a classic script, not `type="module"`.
+- Pick a theme with `<html data-kit-theme="plex|grotesk|signal">` or `--theme`. Light and dark follow the OS.
+- Use the tokens (`--bg`, `--fg`, `--accent`, the `--new`, `--chg`, `--del` pairs) for every colour, so diagrams match the page.
+- Hand-drawn SVG: put `class="d"` on the `<svg>` and use the role classes (`box`, `ln`, `lab`, `ttl`, with `new`, `chg`, `del` or `acc`), never colours. Define one `<marker>` per arrow colour with `fill="currentColor"`.
+- Mermaid: write `<pre class="mermaid">…</pre>`. The kit themes it from the tokens. Mark delta nodes with the `new`, `changed` and `removed` classes.
+- Diagrams fit the page width. Do not make them scroll sideways.
+
 ## Before you open a pull request
 
 Every PR CI run costs money, so a PR goes ready once and each fix is pushed once. Commit, then run both before pushing a PR branch:
