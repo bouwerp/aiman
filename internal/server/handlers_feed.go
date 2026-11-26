@@ -35,7 +35,10 @@ type FeedDeps struct {
 	Store   feed.Store
 	Events  FeedEvents
 	Mutes   FeedUnmuter
-	Memory  *feed.Memory
+	// Act holds the executors and the mute writer; Store, Events and Now
+	// are filled from this struct.
+	Act    feed.ActDeps
+	Memory *feed.Memory
 	// Dir is the manager's directory (digest lines live under it).
 	Dir string
 	// Settings is the feed config block as serve read it.
@@ -383,22 +386,31 @@ func feedMemoryResp(ctx context.Context, req Request, d *FeedDeps) Response {
 	return Response{ID: req.ID, Result: map[string]any{"type": "feed_memory", "bullets": bullets, "mutes": mutes}}
 }
 
-// handleFeedAct runs feed.act. Approve and dismiss arrive with piece P8.
+// handleFeedAct runs feed.act.
 func (s *Server) handleFeedAct(ctx context.Context, req Request, d *FeedDeps) Response {
 	if s.isSessionCall(ctx, req) {
 		return errResp(req.ID, CodeNeedsOperator, "only the operator acts on the feed")
 	}
 	var p struct {
-		ID       int64  `json:"id"`
-		Op       string `json:"op"`
-		MemoryID string `json:"memory_id"`
-		Scope    string `json:"scope"`
-		Key      string `json:"key"`
+		ID       int64                    `json:"id"`
+		Op       string                   `json:"op"`
+		MemoryID string                   `json:"memory_id"`
+		Scope    string                   `json:"scope"`
+		Key      string                   `json:"key"`
+		Option   *int                     `json:"option"`
+		Params   json.RawMessage          `json:"params"`
+		Reason   domain.FeedDismissReason `json:"reason"`
+		Note     string                   `json:"note"`
+		Until    time.Time                `json:"until"`
 	}
 	if r := feedParams(req, &p); r != nil {
 		return *r
 	}
 	switch p.Op {
+	case "approve", "dismiss":
+		return s.feedDecide(ctx, req, d, p.ID, feed.ActRequest{
+			Op: p.Op, Option: p.Option, Params: p.Params, Reason: p.Reason, Note: p.Note, Until: p.Until, By: "operator",
+		})
 	case "forget_memory":
 		if p.MemoryID == "" || d.Memory == nil {
 			return errResp(req.ID, CodeInvalidParams, "forget_memory needs memory_id")
@@ -430,4 +442,53 @@ func (s *Server) handleFeedAct(ctx context.Context, req Request, d *FeedDeps) Re
 	}
 	s.hub.Publish(SessionEvent{Type: "feed", State: "memory"})
 	return feedMemoryResp(ctx, req, d)
+}
+
+// feedDecide runs approve or dismiss through feed.Act and publishes the
+// change.
+func (s *Server) feedDecide(ctx context.Context, req Request, d *FeedDeps, id int64, ar feed.ActRequest) Response {
+	if id == 0 {
+		return errResp(req.ID, CodeInvalidParams, "feed.act needs id")
+	}
+	if _, err := d.Store.GetFeedAction(ctx, id); err != nil {
+		return errResp(req.ID, CodeNotFound, fmt.Sprintf("no feed action %d", id))
+	}
+	deps := d.Act
+	deps.Store, deps.Now = d.Store, d.Now
+	if d.Events != nil {
+		deps.Events = d.Events
+	}
+	deps.OnAction = s.FeedActionChanged
+	a, err := feed.Act(ctx, deps, id, ar)
+	if errors.Is(err, feed.ErrRefused) {
+		return errResp(req.ID, CodeInvalidParams, err.Error())
+	}
+	if err != nil {
+		return feedErr(req, err)
+	}
+	return Response{ID: req.ID, Result: map[string]any{"type": "feed_action", "action": a}}
+}
+
+// FeedTodoAdd adds an open to-do, authored by aiman, to the visible session
+// named by id or name.
+func (s *Server) FeedTodoAdd(ctx context.Context, session, text string) error {
+	text = oneLine(text)
+	if text == "" {
+		return errors.New("to-do text is empty")
+	}
+	sessions, err := s.loadSessions(ctx)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(sessions, func(x domain.Session) bool {
+		return !x.Role.Hidden() && (x.ID == session || x.Name == session)
+	})
+	if i < 0 {
+		return fmt.Errorf("no visible session %q", session)
+	}
+	_, err = s.MutateTodos(ctx, sessions[i], domain.AuthorAiman, func(l *domain.TodoList) error {
+		l.Items = append(l.Items, domain.TodoItem{Text: text, State: domain.TodoPending})
+		return nil
+	})
+	return err
 }

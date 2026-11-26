@@ -188,6 +188,9 @@ func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.expire(ctx)
+	if _, err := WakeSnoozed(ctx, ActDeps{Store: m.o.Store, Now: m.o.Now, OnAction: m.o.OnAction, TTL: m.o.ActionTTL}); err != nil {
+		m.o.Log("feed: wake snoozed: %v", err)
+	}
 	defer m.publishFloor(ctx)
 	running, err := m.o.Store.RunningFeedBatches(ctx)
 	if err != nil {
