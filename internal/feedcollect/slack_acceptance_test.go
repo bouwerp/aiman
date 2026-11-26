@@ -1,4 +1,4 @@
-//go:build feedaccept
+//go:build feedaccept || feedaccept_p3b
 
 package feedcollect_test
 

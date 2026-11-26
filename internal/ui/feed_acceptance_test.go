@@ -1,4 +1,4 @@
-//go:build feedaccept
+//go:build feedaccept || feedaccept_p10
 
 package ui
 
