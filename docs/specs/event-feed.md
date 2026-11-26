@@ -482,3 +482,10 @@ These names and rules are part of the contract. The acceptance tests use them.
 **As landed by P3d**
 
 - `Writer.Append(ctx, events, cursors, drop ...CursorKey)` deletes the dropped keys in the same transaction. The collector drops every stored key a source left out of its returned map, so a source must return every cursor it wants kept.
+
+**As landed by P7**
+
+- `feed.MemoryBullet` has json keys `id`, `text`, `at`.
+- The agent's digest lines are kept per batch in `~/.aiman/feed/digest/<batch>.json`. `feed.events {digest: true}` lists the unanswered events of the newest 10 batches and every event of a batch that failed twice, with the digest line in the event's `title`.
+- `feed.status` `collector.state` is `off`, `not_started` (no `feed.db`), `starting`, `ok`, `stale` (no poll for 10 minutes) or `error`.
+- The daily cap counts batches since local midnight. Recovery and retries ignore the interval. Muted events stay above the high-water mark until a later unmuted event is cut past them.
