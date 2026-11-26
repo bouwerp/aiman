@@ -627,6 +627,8 @@ func TestWriteTaskFile_Content(t *testing.T) {
 		"Stay on scope",
 		"Shared context",
 		"Use `aiman slack`",
+		"`aiman artifact publish`",
+		"Do not use Claude's Artifact tool",
 		"Do not use any other Slack integration",
 		"ASD-STE100 Simplified Technical English",
 	}

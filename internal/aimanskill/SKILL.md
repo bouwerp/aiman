@@ -1,6 +1,6 @@
 ---
 name: aiman
-description: "Use in any Aiman coding session: coordinate work, split it into child sessions, manage the session to-do list, control Aiman sessions on this host, and read or post Slack only through aiman slack, never another Slack integration. Use only when AIMAN_ENV=1 is set. Requires AIMAN_ENV=1."
+description: "Use in any Aiman coding session: coordinate work, split it into child sessions, manage the session to-do list, control Aiman sessions on this host, read or post Slack only through aiman slack, never another Slack integration, and publish every web page only through aiman artifact publish, never Claude's Artifact tool or another host. Use only when AIMAN_ENV=1 is set. Requires AIMAN_ENV=1."
 ---
 
 # Aiman
@@ -489,6 +489,8 @@ aiman slack dm U1[,U2]
 ## Artifacts
 
 Publish a report, dashboard, diagram or explainer for the operator as a private web page. Do not leave it as a loose file on the host.
+
+Use `aiman artifact publish` for every page, in every agent. Do not use Claude's Artifact tool (in Claude, aiman's hook refuses it in a session; reading, listing and opening existing claude.ai artifacts stay allowed), a gist, GitHub Pages or any other host. If `aiman artifact publish` fails, stop and tell the operator the command you ran and its error.
 
 ```bash
 aiman artifact publish report/index.html --title "Load test" [--file chart.svg] [--file data/x.json=out/x.json] [--theme plex|grotesk|signal]
