@@ -182,6 +182,10 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 		return follow(tea.Batch(m.notifyToast(msg.event), m.ciEscalationFetch(msg.event)))
 	}
 
+	// A feed event names an action or batch, never a session.
+	if msg.event.Type == "feed" {
+		return follow(m.feedEventFetch(msg.host))
+	}
 	if msg.event.Type == "keepalive" || (msg.event.ID == "" && msg.event.Type != "session_created") {
 		return follow(nil)
 	}

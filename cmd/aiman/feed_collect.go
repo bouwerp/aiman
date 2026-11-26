@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,18 +23,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// feedCollectConfig is the part of the pushed `feed` block the collector
-// reads.
+// feedCollectConfig is the pushed config as the collector reads it: only
+// its feed block.
 type feedCollectConfig struct {
-	Feed struct {
-		Enabled   *bool  `yaml:"enabled"`
-		Retention string `yaml:"retention"`
-		Slack     struct {
-			CallsPerMinute int      `yaml:"calls_per_minute"`
-			Exclude        []string `yaml:"exclude"`
-			Bots           []string `yaml:"bots"`
-		} `yaml:"slack"`
-	} `yaml:"feed"`
+	Feed config.FeedConfig `yaml:"feed"`
 }
 
 // runFeedCollect is `aiman feed collect` (hidden): the feed collector daemon.
@@ -57,14 +48,11 @@ func runFeedCollect(args []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Feed.Enabled == nil || !*cfg.Feed.Enabled {
+	if !cfg.Feed.EnabledOrDefault() {
 		log.Printf("feed: feed.enabled is not true; the collector does not run")
 		return nil
 	}
-	retention, err := parseFeedRetention(cfg.Feed.Retention)
-	if err != nil {
-		return fmt.Errorf("feed.retention: %w", err)
-	}
+	retention := cfg.Feed.RetentionOrDefault()
 
 	db, err := feeddb.OpenWriter(feeddb.Path(dir))
 	if err != nil {
@@ -109,7 +97,7 @@ func feedSlackSource(dir string, cfg feedCollectConfig) feedcollect.Source {
 	client := &slack.Client{Tokens: slack.Tokens(path), Sleep: feedcollect.SlackNoRetry}
 	sc := cfg.Feed.Slack
 	return &feedLazySlack{client: client, opts: feedcollect.SlackOptions{
-		API: client, CallsPerMinute: sc.CallsPerMinute, Exclude: sc.Exclude, Bots: sc.Bots,
+		API: client, CallsPerMinute: sc.CallsPerMinuteOrDefault(), Exclude: sc.Exclude, Bots: sc.Bots,
 	}}
 }
 
@@ -153,27 +141,6 @@ func readFeedCollectConfig(path string) (feedCollectConfig, error) {
 		return cfg, fmt.Errorf("%s: %w", path, err)
 	}
 	return cfg, nil
-}
-
-// parseFeedRetention reads a retention such as 30d or 720h; empty is the
-// default.
-func parseFeedRetention(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return feedcollect.DefaultRetention, nil
-	}
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(days)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("invalid retention %q", s)
-		}
-		return time.Duration(n) * 24 * time.Hour, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("invalid retention %q", s)
-	}
-	return d, nil
 }
 
 // feedServeRPC calls serve's socket as the operator (no caller), whatever

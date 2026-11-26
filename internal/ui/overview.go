@@ -248,7 +248,7 @@ func (m *Model) noteLatest(host string, latest, run *server.OverviewRun) {
 }
 
 // handleHostPageUpdate and renderHostPage serve the per-host pages opened
-// from the dashboard: Agents on <host> and Overview.
+// from the dashboard: Agents on <host>, Overview, Feed and Feed settings.
 func (m *Model) handleHostPageUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.state == viewStateSelfUpdate {
 		if km, ok := msg.(tea.KeyPressMsg); ok {
@@ -256,8 +256,13 @@ func (m *Model) handleHostPageUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.state == viewStateOverview {
+	switch m.state {
+	case viewStateOverview:
 		return m.handleOverviewUpdate(msg)
+	case viewStateFeed:
+		return m.handleFeedPageUpdate(msg)
+	case viewStateFeedSettings:
+		return m.handleFeedSettingsUpdate(msg)
 	}
 	return m.handleAgentUpdatesUpdate(msg)
 }
@@ -266,8 +271,13 @@ func (m *Model) renderHostPage() string {
 	if m.state == viewStateSelfUpdate {
 		return m.renderSelfUpdateView()
 	}
-	if m.state == viewStateOverview {
+	switch m.state {
+	case viewStateOverview:
 		return m.renderOverviewView()
+	case viewStateFeed:
+		return m.renderFeedPage()
+	case viewStateFeedSettings:
+		return m.renderFeedSettings()
 	}
 	return m.renderAgentUpdatesView()
 }

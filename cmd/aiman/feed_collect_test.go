@@ -7,17 +7,13 @@ import (
 	"time"
 )
 
-func TestParseFeedRetention(t *testing.T) {
-	cases := map[string]time.Duration{"": 30 * 24 * time.Hour, "7d": 7 * 24 * time.Hour, "36h": 36 * time.Hour}
+func TestFeedCollectRetentionFromConfig(t *testing.T) {
+	cases := map[string]time.Duration{"": 30 * 24 * time.Hour, "7d": 7 * 24 * time.Hour, "36h": 36 * time.Hour, "soon": 30 * 24 * time.Hour}
 	for in, want := range cases {
-		got, err := parseFeedRetention(in)
-		if err != nil || got != want {
-			t.Errorf("parseFeedRetention(%q) = %v, %v; want %v", in, got, err, want)
-		}
-	}
-	for _, bad := range []string{"0d", "-1h", "soon", "xd"} {
-		if _, err := parseFeedRetention(bad); err == nil {
-			t.Errorf("parseFeedRetention(%q) succeeded", bad)
+		var cfg feedCollectConfig
+		cfg.Feed.Retention = in
+		if got := cfg.Feed.RetentionOrDefault(); got != want {
+			t.Errorf("retention %q = %v; want %v", in, got, want)
 		}
 	}
 }
@@ -33,7 +29,7 @@ func TestReadFeedCollectConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err = readFeedCollectConfig(path)
-	if err != nil || cfg.Feed.Enabled == nil || !*cfg.Feed.Enabled || cfg.Feed.Retention != "14d" {
+	if err != nil || !cfg.Feed.EnabledOrDefault() || cfg.Feed.Retention != "14d" {
 		t.Fatalf("config = %+v, %v", cfg, err)
 	}
 }

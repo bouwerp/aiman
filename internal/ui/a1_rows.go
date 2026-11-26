@@ -184,6 +184,27 @@ func a1HeaderRight(sessions, needsYou int, scanning bool) string {
 	return a1Text(prefix+needs, a1Dim, false, false)
 }
 
+// renderA1HeaderFeed is the header with the gauge after the host name and
+// the feed badge after the needs-you count. ok is false when it does not fit.
+func renderA1HeaderFeed(host, gauge, feed string, sessions, needsYou int, scanning bool, width int) (string, bool) {
+	if width <= 0 {
+		return "", false
+	}
+	left := a1Text("aiman", a1BoldText, true, false) + a1Text(" · "+host, a1Dim, false, false)
+	if gauge != "" {
+		left += a1Text(" · ", a1Dim, false, false) + gauge
+	}
+	right := a1HeaderRight(sessions, needsYou, scanning)
+	if feed != "" {
+		right += a1Text(" · ", a1Dim, false, false) + feed
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		return "", false
+	}
+	return left + strings.Repeat(" ", gap) + right, true
+}
+
 func (m *Model) a1HostLabel() string {
 	if m.cfg == nil {
 		return "all remotes"
