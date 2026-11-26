@@ -458,7 +458,7 @@ func TestGitHubSourceSinceAndETag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := externalIDs(evs); !slices.Equal(got, []string{"905"}) {
+	if got := externalIDs(evs); !slices.Equal(got, []string{"905@2026-11-20T10:00:00Z"}) {
 		t.Fatalf("events = %v", got)
 	}
 	if _, _, err := src.Poll(ctx, cur3, nil); err != nil {
@@ -480,7 +480,7 @@ func TestGitHubSourceRespectsThreadMute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := externalIDs(evs); !slices.Equal(got, []string{"902"}) {
+	if got := externalIDs(evs); !slices.Equal(got, []string{"902@2026-11-20T09:00:00Z"}) {
 		t.Fatalf("events = %v, want the muted thread left out", got)
 	}
 }
