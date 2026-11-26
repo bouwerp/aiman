@@ -194,7 +194,14 @@ func (c *Collector) poll(ctx context.Context, src Source, now time.Time) error {
 	for k, v := range next {
 		keys[feeddb.CursorKey{Source: name, Key: k}] = v
 	}
-	stored, err := c.db.Append(ctx, events, keys)
+	// A key the source left out of next is one it dropped (an idle thread).
+	var drop []feeddb.CursorKey
+	for k := range cursors {
+		if _, kept := next[k]; !kept {
+			drop = append(drop, feeddb.CursorKey{Source: name, Key: k})
+		}
+	}
+	stored, err := c.db.Append(ctx, events, keys, drop...)
 	if err != nil {
 		return fmt.Errorf("store events: %w", err)
 	}
