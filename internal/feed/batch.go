@@ -72,7 +72,7 @@ func WriteBatchDir(dir string, in BatchInput) error {
 // fence puts text between the batch's UNTRUSTED DATA lines. A line of the
 // text that holds the nonce is broken so it cannot close the fence.
 func fence(nonce, text string) string {
-	text = strings.ReplaceAll(text, nonce, strings.Replace(nonce, nonce[:1], nonce[:1]+"​", 1))
+	text = strings.ReplaceAll(text, nonce, strings.Replace(nonce, nonce[:1], nonce[:1]+"\u200b", 1))
 	return "UNTRUSTED DATA " + nonce + "\n" + text + "\nEND UNTRUSTED DATA " + nonce + "\n"
 }
 

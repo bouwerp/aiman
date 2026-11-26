@@ -174,7 +174,7 @@ func (r *Repository) ListEventsAfterRowID(ctx context.Context, afterRowID int64,
 			marks[i] = "?"
 			args = append(args, string(k))
 		}
-		query += " AND kind IN (" + strings.Join(marks, ",") + ")"
+		query += " AND kind IN (" + strings.Join(marks, ",") + ")" //nolint:gosec // G202: the query adds only ? placeholders
 	}
 	query += " ORDER BY rowid ASC LIMIT ?"
 	args = append(args, limit)
