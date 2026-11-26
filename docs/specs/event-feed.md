@@ -456,3 +456,9 @@ These names and rules are part of the contract. The acceptance tests use them.
 
 - P7 adds `internal/infra/config/feed.go` (spec §10, §12 accessors) and `domain.NotifyFeedAction`, because the manager needs both. P10 keeps the settings page and `applyFeedSetting`; P11 keeps `pushKinds` and the push data.
 - `feed.act` lands in P7 with `forget_memory` and `unmute`; P8 adds `approve` and `dismiss`.
+
+**As landed by P6**
+
+- `FoldDigests` gives a digest the last folded event's id; P7 replaces it with the negative `feed_digests` id when it stores the digest.
+- A digest's `ThreadKey` is `slack:<channel>`; its body lines are `[<event id>] <actor>: <text>`, so the agent can cite one message in it.
+- `brief.go` exports `DigestKind`, `MaxOptions`, `MaxMemoryOps`, `MaxMemoryBullet`, `MaxMemoryBytes`, `MaxActionText`.
