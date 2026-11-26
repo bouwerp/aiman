@@ -387,6 +387,7 @@ func runSubcommand(rest []string) (handled bool, err error) {
 		if len(rest) > 1 && rest[1] == "collect" {
 			return true, runFeedCollect(rest[2:])
 		}
+		return true, runFeed(rest[1:], os.Stdout)
 	}
 	return false, nil
 }
