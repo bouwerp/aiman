@@ -416,3 +416,66 @@ func (r *Repository) FeedThreadHeld(ctx context.Context, threadKey string, event
 	}
 	return eventID <= until, nil
 }
+
+// SaveFeedDigest stores a digest event under the next negative id (one below
+// the smallest stored, -1 for the first) and returns it with that id.
+func (r *Repository) SaveFeedDigest(ctx context.Context, members []int64, e domain.FeedEvent) (domain.FeedEvent, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return e, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lowest int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MIN(id), 0) FROM feed_digests`).Scan(&lowest); err != nil {
+		return e, err
+	}
+	e.ID = min(lowest, 0) - 1
+	mem, err := feedJSON(nonNilInts(members))
+	if err != nil {
+		return e, err
+	}
+	ev, err := feedJSON(e)
+	if err != nil {
+		return e, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO feed_digests(id, members, event, created_at) VALUES(?,?,?,?)`,
+		e.ID, mem, ev, time.Now().UnixMilli()); err != nil {
+		return e, err
+	}
+	if err := tx.Commit(); err != nil {
+		return e, err
+	}
+	r.changed(ChangeOther)
+	return e, nil
+}
+
+// FeedDigests reads stored digest events by id, ascending id; unknown ids are
+// left out.
+func (r *Repository) FeedDigests(ctx context.Context, ids []int64) ([]domain.FeedEvent, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	q := `SELECT event FROM feed_digests WHERE id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `) ORDER BY id` //nolint:gosec // G202: the query adds only ? placeholders
+	rows, err := r.rd.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.FeedEvent
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var e domain.FeedEvent
+		if err := json.Unmarshal([]byte(raw), &e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

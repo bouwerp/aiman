@@ -39,7 +39,7 @@ func Format(label, host string, kind domain.NotifyKind, detail string) string {
 			detail = d
 		}
 	}
-	if (kind == domain.NotifyAgentUpdate || kind == domain.NotifyHostUpdate || kind == domain.NotifyHostPressure) && detail != "" {
+	if (kind == domain.NotifyAgentUpdate || kind == domain.NotifyHostUpdate || kind == domain.NotifyHostPressure || kind == domain.NotifyFeedAction) && detail != "" {
 		return detail
 	}
 	if (kind == domain.NotifyResources || kind == domain.NotifyHarnessImage) && label == "" && detail != "" {

@@ -28,9 +28,9 @@ type BatchInput struct {
 
 // MemoryBullet is one running note of the agent.
 type MemoryBullet struct {
-	ID   string
-	Text string
-	At   time.Time
+	ID   string    `json:"id"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
 }
 
 // Decision is how the operator answered one action.

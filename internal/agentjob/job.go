@@ -49,6 +49,10 @@ type Options struct {
 	AimanBin string
 	UID, GID int
 	Now      func() time.Time
+	// Label marks the job's containers and network; empty is the Label const.
+	Label string
+	// What names the job in errors; empty is "review".
+	What string
 }
 
 // Run runs j's agent headless with only j.Dir mounted (read-only, at /job)
@@ -119,7 +123,7 @@ func Run(ctx context.Context, o Options, j Job) (JobResult, error) {
 	defer func() { _ = os.RemoveAll(work) }()
 	c := Container{
 		Name: j.Name, Image: image, UID: o.UID, GID: o.GID, AimanBin: o.AimanBin,
-		Workdir: JobDir, Stdin: j.Brief, Timeout: timeout,
+		Workdir: JobDir, Stdin: j.Brief, Timeout: timeout, Label: o.Label, What: o.What,
 		Mounts: []Mount{{Host: dir, Container: JobDir, ReadOnly: true}},
 	}
 	if err := Prepare(work, &c, Launch{Agent: j.Agent, Model: j.Model, Bin: bin, Cred: cred}); err != nil {
