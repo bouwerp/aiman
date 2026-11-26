@@ -1,6 +1,6 @@
 # artifacts: private HTML pages from a session, on Cloudflare behind Google sign-in
 
-**Revision:** 7 · **Size:** project · **Status:** approved 2026-11-26 · **Task:** operator request 2026-11-26 · **Live PoC:** this page, `https://aiman.fyi/a/wx5j6mefp3qlkekr2cvr/`
+**Revision:** 7 · **Size:** project · **Status:** as built 2026-11-26 · **Task:** operator request 2026-11-26 · **Live PoC:** this page, `https://aiman.fyi/a/wx5j6mefp3qlkekr2cvr/`
 
 **Legend:** green = new, amber = changed, red dashed = removed.
 
@@ -531,3 +531,12 @@ func NewCFObjects(base, account, bucket string, token TokenSource, hc *http.Clie
 
 - The emulated checks race with other writers. Serve is the only writer of an artifact (one host owns it), and `Publisher` serialises Publish, Share and Delete per artifact id with an in-process lock, so the check and the write cannot interleave within serve.
 - Wiring: `artifacts.auth` is `cf_oauth` (REST object API, `cf` must be on PATH) or `r2_key` (S3 API with `~/.aiman/artifacts-r2.json`, the default when that file exists). With `cf_oauth` and no `cf` config file, the RPCs answer `unavailable`.
+
+## Deviations from the approved design
+
+- Hosts publish with the `cf` CLI's OAuth login and R2's REST object API by default (operator's option 2), not a bucket-scoped key. The accepted risk: that token can also change the Worker and Access. `r2_key` with the S3 API stays as the other `artifacts.auth` mode.
+- R2's REST object API ignores `If-None-Match` and `If-Match`, so serve emulates them (read first, then write) under a per-artifact lock; weak ETags are normalised. The `r2_key` mode keeps R2's own conditions.
+- Setup renews the cf token through `cf auth whoami` before it calls Cloudflare, as serve does.
+- `theme.css` inlines the 13 font faces as `data:` URIs, because a sandboxed page cannot load same-host fonts; CSP `font-src 'self' data:`. The kit is about 360 KB, not 17 KiB.
+- Share, unshare and delete handlers are in `internal/server/handlers_artifact_share.go`, not `handlers_artifact.go`.
+- `artifacts.team` and `artifacts.identity_provider` were added, so setup needs no flags that the config already holds.

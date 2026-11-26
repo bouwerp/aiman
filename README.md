@@ -1147,6 +1147,35 @@ aiman slack list set F056 Rec012 --set Status=Done
 
 The credentials file is `~/.aiman/slack-oauth.json`, mode `0600`. `AIMAN_SLACK_USER_TOKEN` overrides the user token for one process. There is no bot user to invite.
 
+### Artifacts
+
+An artifact is an HTML page plus its files that a session publishes and the operator opens at a private URL, `https://<host>/a/<id>/`. Pages sit in a private R2 bucket, behind a Cloudflare Worker and Cloudflare Access with Google sign-in. Each page runs in a sandbox with no cookies or storage. Republishing adds a version; `/a/<id>/v/<n>/` pins one. A theme kit (`kit/theme.css`, `kit/kit.js`) gives pages and diagrams one look in light and dark.
+
+One-time Cloudflare steps:
+
+1. Put a zone (for example `aiman.fyi`) on Cloudflare and enable R2 on the account.
+2. In Zero Trust, pick a team name and add Google as a login method.
+3. Log in with the `cf` CLI on the machine that runs setup.
+
+```bash
+aiman artifact setup --cf-oauth --account ACCOUNT_ID --host aiman.fyi \
+  --team TEAM --idp IDP_ID --owner you@example.com --viewer you@example.com
+```
+
+Setup is idempotent and prints the Access AUD and app id. Without `--cf-oauth` it reads a Cloudflare API token from stdin. Missing flags come from `artifacts:` in `~/.aiman/config.yaml` (`host`, `account_id`, `bucket`, `owners`, `team`, `identity_provider`, `auth`). `auth` is `cf_oauth` (the host uses the `cf` login) or `r2_key` (a bucket-scoped key in `~/.aiman/artifacts-r2.json`, written by `aiman artifact setup --host-key`).
+
+```bash
+aiman artifact publish report/index.html --title "Load test" --theme plex
+aiman artifact publish report/index.html --id ID --expect-version 1
+aiman artifact list
+aiman artifact get ID
+aiman artifact share ID --email lead@partner.com      # operator
+aiman artifact unshare ID --all                       # operator
+aiman artifact delete ID                              # operator
+```
+
+Sessions publish, list and get. Share, unshare, delete and setup are the operator's. Sharing writes the Worker's share list only; to let a new email sign in, run setup again with that `--viewer`.
+
 ## 📁 Configuration
 
 All data is stored in `~/.aiman/`:
