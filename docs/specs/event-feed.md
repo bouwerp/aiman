@@ -444,3 +444,10 @@ These names and rules are part of the contract. The acceptance tests use them.
 - `agentjob.HostCredentials(home)` returns `CredentialReader{Home, Getenv, Now}.For`; `images.HostCredentials` aliases the struct.
 - Other exports P7 can use: `Supported`, `Egress`, `Prepare`, `Launch`, `IsELF`, `JobDir`, `DefaultTimeout`, `Label`.
 - Job containers still carry the label `aiman.review=1` and the review's error texts. P7 gives feed jobs the label `aiman.feed=1` and job-neutral error texts through `Options`, without changing the image review.
+
+**As landed by P1 and P2 (read before P6 and P7)**
+
+- `feed_digests(id INTEGER PRIMARY KEY, members TEXT, event TEXT, created_at INTEGER)` exists with no methods. P7 adds the methods and may change the columns; digest ids are negative, as above.
+- `Reader.Thread` treats `beforeID` 0 or less as no upper bound.
+- `ListFeedActions` with no states returns every state.
+- `(*sqlite.Repository).LastEventRowID(ctx) (int64, error)` answers the newest ledger rowid (used for `after_rowid: -1`).
