@@ -474,6 +474,7 @@ func writeTaskFile(ctx context.Context, remote domain.RemoteExecutor, worktreePa
 		sb.WriteString(graphify.TaskFileLine)
 	}
 	sb.WriteString(SlackFirstLine)
+	sb.WriteString(ArtifactsFirstLine)
 	sb.WriteString("- **No secrets or credentials in code.** Do not hardcode tokens, passwords, API keys, or other secrets.\n")
 	sb.WriteString("- **Preserve existing tests.** Do not delete, skip, or weaken existing tests to make your changes pass. If an existing test conflicts with the new behaviour, update it to reflect the correct new expectation and explain why.\n")
 	sb.WriteString("- **Respect the project structure.** Follow existing file layout, naming conventions, and patterns. When in doubt, look at how similar features are implemented in the codebase and stay consistent.\n\n")
@@ -795,6 +796,10 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 	result.InitialPrompt = buildSessionPrompt(promptFiles)
 	return result, nil
 }
+
+// ArtifactsFirstLine is the task file guardrail that routes every page a
+// session publishes through aiman artifact publish.
+const ArtifactsFirstLine = "- **Web pages.** Publish every report, dashboard, diagram or other page for the operator with `aiman artifact publish` (the aiman skill's Artifacts section). Do not use Claude's Artifact tool, a gist, Pages or any other host. If `aiman artifact publish` fails, stop and tell the operator the command and the error.\n"
 
 // SlackFirstLine is the task file guardrail that routes every Slack read and
 // write through aiman slack and rules out the agent's own Slack tools; a

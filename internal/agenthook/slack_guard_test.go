@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-// gateGroups is a settings file's PreToolUse groups without the Slack guard,
-// which every Claude install carries.
+// gateGroups is a settings file's PreToolUse groups without the Slack and
+// artifact guards, which every Claude install carries.
 func gateGroups(hooks map[string]any) []any {
 	groups, _ := hooks["PreToolUse"].([]any)
 	var out []any
 	for _, g := range groups {
-		if !commandHasMarker(g, SlackGuardMarker) {
+		if !commandHasMarker(g, SlackGuardMarker) && !commandHasMarker(g, ArtifactGuardMarker) {
 			out = append(out, g)
 		}
 	}
