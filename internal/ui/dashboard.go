@@ -7027,8 +7027,16 @@ func (m *Model) handleWorktreeExistsUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = viewStateMain
 				return m, m.createSession(placeholderID)
 			}
-			// No tracked placeholder (e.g. it was dismissed) — start fresh.
+			// No tracked placeholder: the branch picker opened this dialog
+			// before the agent picker ran, so pick the agent first.
 			m.sessionCfg.AttachExisting = true
+			if m.sessionCfg.Agent == nil {
+				m.sessionCfg.Directory = ""
+				m.loadingMsg = "Scanning available agents..."
+				m.loadingNext = viewStateAgentPicker
+				m.state = viewStateLoading
+				return m, m.fetchAgents()
+			}
 			return m, m.startBackgroundCreate()
 		case "b":
 			// Back into the wizard — the current background attempt is dead.
