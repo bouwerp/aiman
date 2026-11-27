@@ -59,7 +59,7 @@ func (m *Model) toggleSelectedGroupCollapsed() (tea.Model, tea.Cmd, bool) {
 	if m.collapsedGroups == nil {
 		m.collapsedGroups = map[string]bool{}
 	}
-	key := groupCollapseKey(it.session.Group, it.remoteName)
+	key := it.headerKey()
 	m.collapsedGroups[key] = !m.collapsedGroups[key]
 	m.applyRemoteFilter()
 	return m, nil, true

@@ -158,6 +158,8 @@ field = COALESCE(NULLIF(excluded.field, ''), sessions.field)
 
 **Fields always overwritten:** `status`, `updated_at`.
 
+**Written only by `SetPinned`:** `pinned` (INTEGER, 0 or 1). Save never writes it, so a discovery save cannot set or clear it; `SetPinned` reports `ChangeIdentity`.
+
 **Fields with null-safe COALESCE (not empty-string):** `tunnels_json`, `aws_profile`, `aws_config_json`.
 
 The `tmux_session` column keeps its name and holds `TerminalName`. `backend` is `pty`, `tmux` (a legacy row, `domain.BackendLegacyTmux`) or empty (no terminal recorded). Opening the DB sets a NULL `backend`, a row written before the column existed, to `tmux`; an empty value stays empty.
@@ -193,6 +195,8 @@ Sessions merge by ID. Discovery keeps every live PTY session with an ID of its o
 A legacy tmux row is never discovered. It stays listed as inactive, in memory only, until the user stops it and restarts it into pty.
 
 `applyDiscoveryResult` overlays those DB fields onto live sessions (`overlayPersistedSessionFields`) so a scan cannot flatten names and groups in the TUI. Save still uses COALESCE so empty discovery writes do not wipe the DB. Serve's non-empty name and group win over the laptop's in `session_created`, so the TUI's group assign, group rename and session rename save the laptop DB and also call `session.move` / `session.rename` on that session's serve (`syncIdentityToServe`, `internal/ui/session_identity_sync.go`); a failure toasts, an old serve or a `not_found` is silent.
+
+Pins (`session.pin {session|id, pinned}`, CLI `aiman session pin|unpin <target>`, `internal/server/handlers_pin.go`) live on serve's row: operator only (`needs_operator` for a session caller), answering `{"type":"session","session":…}`, a plain gateway device method like `session.move`. `SessionInfo.pinned` is always set by serve (absent from an older serve), and `session_created` is announced again when a row's group or pin changes. The TUI's `*` on the sessions tab (`internal/ui/session_pin.go`) flips the pin in memory and the laptop DB (`SetPinned`) and calls `session.pin` through `syncIdentityToServe`; a `session_created` carrying `pinned` sets the laptop's pin (`applyServePin`), a scan keeps the stored one. A pinned session lists with its descendants under a bold gold `★ pinned` header at the top (`groupedSessionItems`, collapse key `pinnedBucketKey`, never a group's), and not in its group.
 
 The `discoveryResultMsg` handler in `dashboard.go` saves discovered sessions to DB after each discovery cycle. Empty discovered fields are safe because of the COALESCE fix.
 

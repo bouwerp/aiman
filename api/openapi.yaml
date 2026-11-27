@@ -307,6 +307,11 @@ components:
           type: string
         group:
           type: string
+        pinned:
+          type: boolean
+          description: >
+            The operator pinned the session (session.pin). Absent from an
+            older serve, which stores no pin.
         parent_id:
           type: string
           description: The session that created this one; empty for a top-level session.
@@ -740,6 +745,7 @@ components:
             - session.create
             - session.rename
             - session.move
+            - session.pin
             - session.forget
             - session.restart
             - session.terminate
@@ -883,6 +889,9 @@ components:
           type: string
         group:
           type: string
+        pinned:
+          type: boolean
+          description: session.pin; true pins the session, false unpins it. Operator only.
         lines:
           type: integer
           description: host.logs and harness.logs; default 200, at most 1000.

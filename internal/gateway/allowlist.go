@@ -38,7 +38,7 @@ var (
 	// slack_draft writes a draft only the member can see and sends nothing, a
 	// todo_add adds a to-do, and a read opens nothing on the host.
 	deviceWriteMethods = []string{
-		"session.prompt", "session.rename", "session.move",
+		"session.prompt", "session.rename", "session.move", "session.pin",
 		"session.terminate",
 		"steer.send",
 		"todo.add", "todo.update", "todo.move", "todo.remove",

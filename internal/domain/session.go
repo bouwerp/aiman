@@ -52,11 +52,14 @@ const (
 )
 
 type Session struct {
-	ID               string
-	Name             string // display alias, unique per host; independent of Branch and the worktree
-	Group            string // work bucket; empty persists as GroupUngrouped
-	ParentID         string // session that spawned this one; empty is a root
-	Role             SessionRole
+	ID       string
+	Name     string // display alias, unique per host; independent of Branch and the worktree
+	Group    string // work bucket; empty persists as GroupUngrouped
+	ParentID string // session that spawned this one; empty is a root
+	Role     SessionRole
+	// Pinned lifts the session, with its descendants, into the Pinned section
+	// at the top of the TUI list. Save never writes it; SetPinned does.
+	Pinned           bool
 	Unprotected      bool // before_pr is on but the agent has no PreToolUse guard
 	IssueKey         string
 	IssueType        string // JIRA issue type when the session came from an issue, e.g. "Bug"

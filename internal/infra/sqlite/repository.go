@@ -131,6 +131,7 @@ func migrate(db *sql.DB) (*Repository, error) {
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN issue_type TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN base_branch TEXT")
 	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN budget_tokens INTEGER NOT NULL DEFAULT 0")
+	_, _ = db.Exec("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
 
 	// Columns added by ALTER TABLE leave NULL on every pre-existing row, and
 	// Save's `COALESCE(NULLIF(excluded.mode, ''), sessions.mode)` keeps that NULL
@@ -433,6 +434,23 @@ func (r *Repository) ClearAgentEnded(ctx context.Context, id string) error {
 	}
 	if err := r.changedIf(ChangeOther, execErr(r.db.ExecContext(ctx, `UPDATE sessions SET agent_ended = '' WHERE id = ?;`, id))); err != nil {
 		return fmt.Errorf("clearing agent ended: %w", err)
+	}
+	return nil
+}
+
+// SetPinned writes the session's pin. Save never writes the column, so a
+// discovery save, which cannot know the pin, neither sets nor clears it.
+func (r *Repository) SetPinned(ctx context.Context, id string, pinned bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	v := 0
+	if pinned {
+		v = 1
+	}
+	if err := r.changedIf(ChangeIdentity, execErr(r.db.ExecContext(ctx, `UPDATE sessions SET pinned = ? WHERE id = ?;`, v, id))); err != nil {
+		return fmt.Errorf("setting pin: %w", err)
 	}
 	return nil
 }

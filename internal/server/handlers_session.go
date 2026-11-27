@@ -33,11 +33,14 @@ import (
 )
 
 type SessionInfo struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Group        string `json:"group"`
-	ParentID     string `json:"parent_id,omitempty"`
-	Role         string `json:"role,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Group    string `json:"group"`
+	ParentID string `json:"parent_id,omitempty"`
+	Role     string `json:"role,omitempty"`
+	// Pinned is always set by serve; nil means an older serve that stores no
+	// pin, so a client keeps the pin it has.
+	Pinned       *bool  `json:"pinned,omitempty"`
 	IssueKey     string `json:"issue_key,omitempty"`
 	Branch       string `json:"branch,omitempty"`
 	BaseBranch   string `json:"base_branch,omitempty"`
@@ -82,12 +85,14 @@ type SessionInfo struct {
 }
 
 func sessionInfo(s domain.Session, callerID string) SessionInfo {
+	pinned := s.Pinned
 	return SessionInfo{
 		ID:               s.ID,
 		Name:             s.Name,
 		Group:            s.Group,
 		ParentID:         s.ParentID,
 		Role:             string(s.Role),
+		Pinned:           &pinned,
 		BaseBranch:       s.BaseBranch,
 		IssueKey:         s.IssueKey,
 		Branch:           s.Branch,

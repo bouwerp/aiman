@@ -135,6 +135,10 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 	if live.Role == "" {
 		live.Role = stored.Role
 	}
+	// A scan never knows the pin; serve's announcement sets it (applyServePin).
+	if !live.Pinned {
+		live.Pinned = stored.Pinned
+	}
 	if stored.WorkingDirectory != "" {
 		live.WorkingDirectory = stored.WorkingDirectory
 	}
