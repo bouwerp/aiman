@@ -55,18 +55,39 @@ func creatingPlaceholderMatchesLive(placeholder, live domain.Session) bool {
 	if live.ID == "" || live.ID == placeholder.ID {
 		return false
 	}
+	if placeholder.IsWorkspace() {
+		// A workspace placeholder is its session only when the branch and
+		// the repositories, in order, are the same.
+		return live.IsWorkspace() && placeholder.Branch != "" && placeholder.Branch == live.Branch &&
+			sameMemberRepos(placeholder.Members, live.Members)
+	}
 	phTerminal := domain.TerminalNameFromBranch(placeholder.TerminalName)
 	liveTerminal := domain.TerminalNameFromBranch(live.TerminalName)
 	if phTerminal != "" && phTerminal == liveTerminal {
 		return true
 	}
-	if placeholder.Branch == "" || placeholder.Branch != live.Branch {
+	if placeholder.Branch == "" || placeholder.Branch != live.Branch || live.IsWorkspace() {
 		return false
 	}
 	if placeholder.RepoName == "" || live.RepoName == "" {
 		return true
 	}
 	return placeholder.RepoName == live.RepoName
+}
+
+// sameMemberRepos reports two member lists naming the same repositories in
+// the same Ord order (ignoring case, as GitHub slugs do).
+func sameMemberRepos(a, b []domain.SessionRepo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as, bs := sortedMembers(a), sortedMembers(b)
+	for i := range as {
+		if !strings.EqualFold(as[i].Repo, bs[i].Repo) {
+			return false
+		}
+	}
+	return true
 }
 
 func upsertSessionReplacing(sessions []domain.Session, placeholderID string, live domain.Session) []domain.Session {
@@ -159,6 +180,11 @@ func overlayPersistedSessionFields(live, stored domain.Session) domain.Session {
 	}
 	if live.WorktreePath == "" {
 		live.WorktreePath = stored.WorktreePath
+	}
+	// A scan never knows a workspace's members; serve's announcement and the
+	// stored row do.
+	if len(live.Members) == 0 && len(stored.Members) > 0 {
+		live.Members = stored.Members
 	}
 	if live.LocalPath == "" {
 		live.LocalPath = stored.LocalPath

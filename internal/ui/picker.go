@@ -14,10 +14,16 @@ import (
 )
 
 type RepoItem struct {
-	repo domain.Repo
+	repo   domain.Repo
+	marked bool
 }
 
-func (i RepoItem) Title() string       { return i.repo.Name }
+func (i RepoItem) Title() string {
+	if i.marked {
+		return "[x] " + i.repo.Name
+	}
+	return i.repo.Name
+}
 func (i RepoItem) Description() string { return i.repo.URL }
 func (i RepoItem) FilterValue() string { return i.repo.Name }
 
@@ -46,6 +52,64 @@ type RepoPickerModel struct {
 	selectedOwner string
 	config        *config.GitConfig
 	Skip          bool
+	// Single turns marking off: existing-branch, review and autonomous
+	// creates pick one repository.
+	Single bool
+	// marked holds the repos marked with space, in mark order.
+	marked []domain.Repo
+	// workspace is set by enter with 2+ marks.
+	workspace []domain.Repo
+	markNote  string
+}
+
+// MaxWorkspaceRepos is the most repositories one workspace session holds.
+const MaxWorkspaceRepos = 8
+
+// Marked returns the marked repositories in mark order.
+func (m RepoPickerModel) Marked() []domain.Repo { return m.marked }
+
+// Workspace returns the marked repositories once enter finished a multi-repo
+// pick (2+ marks), else nil.
+func (m RepoPickerModel) Workspace() []domain.Repo { return m.workspace }
+
+func (m RepoPickerModel) markIndex(name string) int {
+	for i, r := range m.marked {
+		if r.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *RepoPickerModel) toggleMark() {
+	i, ok := m.list.SelectedItem().(RepoItem)
+	if !ok {
+		return
+	}
+	m.markNote = ""
+	if at := m.markIndex(i.repo.Name); at >= 0 {
+		m.marked = append(m.marked[:at:at], m.marked[at+1:]...)
+		m.refreshMarks()
+		return
+	}
+	if len(m.marked) >= MaxWorkspaceRepos {
+		m.markNote = fmt.Sprintf("at most %d repositories", MaxWorkspaceRepos)
+		return
+	}
+	m.marked = append(m.marked, i.repo)
+	m.refreshMarks()
+}
+
+// refreshMarks redraws the items so marked rows carry "[x] ".
+func (m *RepoPickerModel) refreshMarks() {
+	items := m.list.Items()
+	for idx, it := range items {
+		if ri, ok := it.(RepoItem); ok {
+			ri.marked = m.markIndex(ri.repo.Name) >= 0
+			items[idx] = ri
+		}
+	}
+	m.list.SetItems(items)
 }
 
 func NewRepoPickerModel(repos []domain.Repo, cfg *config.GitConfig) RepoPickerModel {
@@ -118,7 +182,21 @@ func (m RepoPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case repoStateList:
 			switch msg.String() {
+			case "space":
+				if !m.Single && m.list.FilterState() != list.Filtering {
+					m.toggleMark()
+					return m, nil
+				}
 			case "enter":
+				switch {
+				case len(m.marked) >= 2:
+					m.workspace = append([]domain.Repo(nil), m.marked...)
+					return m, nil
+				case len(m.marked) == 1:
+					r := m.marked[0]
+					m.selected = &r
+					return m, nil
+				}
 				if i, ok := m.list.SelectedItem().(RepoItem); ok {
 					m.selected = &i.repo
 					return m, nil
@@ -192,7 +270,19 @@ func (m RepoPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m RepoPickerModel) viewString() string {
 	switch m.state {
 	case repoStateList:
-		return docStyle.Render(m.list.View()) + "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("ctrl+n: create new repository • ctrl+a: skip (no repository)")
+		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		help := "ctrl+n: create new repository • ctrl+a: skip (no repository)"
+		if !m.Single {
+			help = "space: mark (multi-repo) • " + help
+		}
+		out := docStyle.Render(m.list.View()) + "\n  " + dim.Render(help)
+		if n := len(m.marked); n > 0 {
+			out += "\n  " + dim.Render(fmt.Sprintf("%d marked: enter creates one session over them", n))
+		}
+		if m.markNote != "" {
+			out += "\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(m.markNote)
+		}
+		return out
 
 	case repoStateOwnerPicker:
 		return docStyle.Render(m.ownersList.View())
