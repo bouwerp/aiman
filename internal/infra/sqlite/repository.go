@@ -254,6 +254,10 @@ func migrate(db *sql.DB) (*Repository, error) {
 		return nil, fmt.Errorf("failed to create forgotten sessions table: %w", err)
 	}
 
+	if err := ensureSessionRepos(db); err != nil {
+		return nil, fmt.Errorf("failed to create session repos table: %w", err)
+	}
+
 	if err := ensureHarnessShares(db); err != nil {
 		return nil, fmt.Errorf("failed to create harness share tables: %w", err)
 	}
@@ -464,6 +468,11 @@ func (r *Repository) Get(ctx context.Context, id string) (*domain.Session, error
 		}
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
+	ms, err := r.loadMembers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.Members = ms[id]
 	return &s, nil
 }
 
@@ -484,13 +493,21 @@ func (r *Repository) List(ctx context.Context) ([]domain.Session, error) {
 		}
 		sessions = append(sessions, s)
 	}
-
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
+	}
+	ms, err := r.loadMembers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range sessions {
+		sessions[i].Members = ms[sessions[i].ID]
+	}
 	return sessions, nil
 }
 
 func (r *Repository) Delete(ctx context.Context, id string) error {
-	query := "DELETE FROM sessions WHERE id = ?;"
-	if err := r.changedIf(ChangeIdentity, execErr(r.db.ExecContext(ctx, query, id))); err != nil {
+	if err := r.changedIf(ChangeIdentity, r.deleteSessionRows(ctx, id)); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 	return nil
@@ -753,4 +770,20 @@ func scanScheduledPrompt(row spScanner) (*domain.ScheduledPrompt, error) {
 		sp.LastRunAt = lastRunAt.Time
 	}
 	return &sp, nil
+}
+
+// deleteSessionRows removes a session and its workspace members together.
+func (r *Repository) deleteSessionRows(ctx context.Context, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_repos WHERE session_id = ?;`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?;`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

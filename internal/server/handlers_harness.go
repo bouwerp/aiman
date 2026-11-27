@@ -206,6 +206,9 @@ func (s *Server) harnessSession(ctx context.Context, req Request, name string) (
 	if r, refused := s.refuseOutOfScope(ctx, req, sess.ID); refused {
 		return domain.Session{}, &r
 	}
+	if sess.IsWorkspace() {
+		return fail(CodeInvalidParams, fmt.Sprintf("the harness does not support a multi-repo session yet (%s)", sess.Name))
+	}
 	return sess, nil
 }
 

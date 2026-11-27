@@ -112,6 +112,9 @@ func (m *Model) startBackgroundTerminate(s domain.Session, forced bool) tea.Cmd 
 		forced:  forced,
 		steps:   terminateStepLabels(forced),
 	}
+	if terminateViaServe(s) {
+		ts.steps = workspaceTerminateStepLabels(forced)
+	}
 	ts.errs = make([]string, len(ts.steps))
 	m.terminatingSessions[s.ID] = ts
 	m.applyRemoteFilter() // refresh list so the item shows "terminating…"

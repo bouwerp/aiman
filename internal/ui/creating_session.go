@@ -59,7 +59,21 @@ func newCreatingPlaceholder(cfg domain.SessionConfig, remote config.Remote) doma
 		Status:       domain.SessionStatusProvisioning,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+		Members:      placeholderMembers(cfg.Workspace),
 	}
+}
+
+// placeholderMembers is a workspace create's repositories as members, so the
+// placeholder IsWorkspace and lists them before serve answers.
+func placeholderMembers(ws []domain.RepoSpec) []domain.SessionRepo {
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]domain.SessionRepo, len(ws))
+	for i, r := range ws {
+		out[i] = domain.SessionRepo{Repo: r.Repo, BaseBranch: r.Base, Ord: i}
+	}
+	return out
 }
 
 func (m *Model) creatingPlaceholderFor(live domain.Session) *creatingSession {

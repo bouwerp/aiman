@@ -53,6 +53,9 @@ func ciGateHook(stdin io.Reader, getenv func(string) string, call ciCaller, stde
 	if q.Draft {
 		params["draft"] = true
 	}
+	if q.Repo != "" {
+		params["repo"] = q.Repo
+	}
 	raw, err := call("ci.gate", params)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "aiman ci gate: serve did not answer (%v); the %s is blocked until it does\n", err, q.Kind)
@@ -78,18 +81,19 @@ func ciGateHook(stdin io.Reader, getenv func(string) string, call ciCaller, stde
 }
 
 func ciUsage() error {
-	fmt.Fprintf(os.Stderr, "Usage: aiman ci local [--wait] [--session NAME]\n")
-	fmt.Fprintf(os.Stderr, "       aiman ci status [--json] [--session NAME]\n")
-	fmt.Fprintf(os.Stderr, "       aiman ci gate --kind push|create|ready [--command CMD] [--draft] [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "Usage: aiman ci local [--wait] [--session NAME] [--repo OWNER/NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman ci status [--json] [--session NAME] [--repo OWNER/NAME]\n")
+	fmt.Fprintf(os.Stderr, "       aiman ci gate --kind push|create|ready [--command CMD] [--draft] [--session NAME] [--repo OWNER/NAME]\n")
 	fmt.Fprintf(os.Stderr, "       aiman ci gate --hook   (Claude PreToolUse payload on stdin; exit 2 blocks)\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
+	fmt.Fprintf(os.Stderr, "--repo picks the repository of a multi-repo session; inside a member's directory it is optional.\n")
 	fmt.Fprintf(os.Stderr, "ci watch and ci get: aiman rpc ci.watch / ci.get.\n")
 	return errUsage
 }
 
 type ciFlags struct {
-	session, kind, command string
-	wait, json, draft      bool
+	session, kind, command, repo string
+	wait, json, draft            bool
 }
 
 func parseCIFlags(args []string, getenv func(string) string) (ciFlags, error) {
@@ -104,7 +108,7 @@ func parseCIFlags(args []string, getenv func(string) string) (ciFlags, error) {
 			f.json = true
 		case "--draft":
 			f.draft = true
-		case "--session", "--kind", "--command":
+		case "--session", "--kind", "--command", "--repo":
 			if len(args) == 0 {
 				return f, ciUsage()
 			}
@@ -115,6 +119,8 @@ func parseCIFlags(args []string, getenv func(string) string) (ciFlags, error) {
 				f.session = v
 			case "--kind":
 				f.kind = v
+			case "--repo":
+				f.repo = v
 			default:
 				f.command = v
 			}
@@ -152,7 +158,7 @@ func ciMain(args []string, getenv func(string) string, call ciCaller, out io.Wri
 }
 
 func ciLocal(f ciFlags, call ciCaller, out io.Writer, sleep func(time.Duration)) error {
-	raw, err := call("ci.local", map[string]any{"session": f.session, "wait": f.wait})
+	raw, err := call("ci.local", f.target(map[string]any{"wait": f.wait}))
 	if err != nil {
 		return err
 	}
@@ -173,7 +179,7 @@ func ciLocal(f ciFlags, call ciCaller, out io.Writer, sleep func(time.Duration))
 	position := 0
 	for !res.Done {
 		sleep(ciPollEvery)
-		st, err := fetchCIStatus(f.session, call)
+		st, err := fetchCIStatus(f, call)
 		if err != nil {
 			return err
 		}
@@ -190,15 +196,29 @@ func ciLocal(f ciFlags, call ciCaller, out io.Writer, sleep func(time.Duration))
 			}
 		}
 	}
-	st, err := fetchCIStatus(f.session, call)
+	st, err := fetchCIStatus(f, call)
 	if err != nil {
 		return err
 	}
 	return printCIStatus(out, st)
 }
 
-func fetchCIStatus(session string, call ciCaller) (server.CIStatus, error) {
-	raw, err := call("ci.status", map[string]any{"session": session})
+// target adds the session, the repo and the caller's directory to params:
+// serve picks a multi-repo session's member from repo, else from the
+// directory.
+func (f ciFlags) target(params map[string]any) map[string]any {
+	params["session"] = f.session
+	if f.repo != "" {
+		params["repo"] = f.repo
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		params["cwd"] = cwd
+	}
+	return params
+}
+
+func fetchCIStatus(f ciFlags, call ciCaller) (server.CIStatus, error) {
+	raw, err := call("ci.status", f.target(map[string]any{}))
 	if err != nil {
 		return server.CIStatus{}, err
 	}
@@ -210,7 +230,7 @@ func fetchCIStatus(session string, call ciCaller) (server.CIStatus, error) {
 }
 
 func ciStatusCmd(f ciFlags, call ciCaller, out io.Writer) error {
-	st, err := fetchCIStatus(f.session, call)
+	st, err := fetchCIStatus(f, call)
 	if err != nil {
 		return err
 	}
@@ -274,6 +294,9 @@ func ciGate(f ciFlags, call ciCaller, out io.Writer) error {
 	}
 	if f.draft {
 		params["draft"] = true
+	}
+	if f.repo != "" {
+		params["repo"] = f.repo
 	}
 	raw, err := call("ci.gate", params)
 	if err != nil {

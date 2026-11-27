@@ -12,6 +12,7 @@ import (
 
 	"github.com/bouwerp/aiman/internal/domain"
 	"github.com/bouwerp/aiman/internal/infra/config"
+	infraGit "github.com/bouwerp/aiman/internal/infra/git"
 	"github.com/bouwerp/aiman/internal/infra/graphify"
 	"github.com/bouwerp/aiman/internal/quality"
 	"github.com/bouwerp/aiman/internal/shellx"
@@ -223,4 +224,66 @@ func PushUserChecklists(ctx context.Context, remote domain.RemoteExecutor, local
 		pushed++
 	}
 	return pushed, nil
+}
+
+// buildWorkspaceKit is buildKit for a multi-repo session: done_when and
+// requires of every member are merged (in member order, duplicates once),
+// required tools are checked once in the workspace directory, and each
+// member's matching checklists are listed (a checklist path once).
+func (m *FlowManager) buildWorkspaceKit(ctx context.Context, sshMgr domain.RemoteExecutor, cfg domain.SessionConfig, dir string, members []domain.SessionRepo, agentCommand string) domain.QualityKit {
+	kit := domain.QualityKit{Role: cfg.Role}
+	if cfg.AdHoc || cfg.Role.Hidden() {
+		return kit
+	}
+	var doneWhen, requires []string
+	seenReq := map[string]bool{}
+	for _, mem := range members {
+		rc, _ := config.LookupRepo(m.repos, mem.Repo)
+		doneWhen = append(doneWhen, rc.DoneWhen...)
+		for _, r := range rc.Requires {
+			if r = strings.TrimSpace(r); r != "" && !seenReq[r] {
+				seenReq[r] = true
+				requires = append(requires, r)
+			}
+		}
+	}
+	if m.userChecklistDir != "" {
+		if _, err := PushUserChecklists(ctx, sshMgr, m.userChecklistDir); err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("Checklists not pushed: %v", err))
+		}
+	}
+	if len(requires) > 0 {
+		infraGit.ReportProgress(ctx, "Checking required tools…")
+		missing, err := CheckRequires(ctx, sshMgr, dir, agentCommand, requires)
+		if err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("Required tools not checked: %v", err))
+		}
+		for _, e := range missing {
+			infraGit.ReportProgress(ctx, "Missing on remote: "+e)
+		}
+	}
+	infraGit.ReportProgress(ctx, "Building quality kit…")
+	var ac []string
+	if cfg.Issue != nil {
+		ac = cfg.Issue.AcceptanceCriteria
+	}
+	kit.DoneWhen = quality.DoneWhen(ac, doneWhen)
+	seenList := map[string]bool{}
+	for _, mem := range members {
+		built, notes, err := BuildQualityKit(ctx, sshMgr, KitInput{Repo: mem.Repo, Worktree: mem.WorktreePath, Role: cfg.Role, Restart: true})
+		for _, n := range notes {
+			infraGit.ReportProgress(ctx, n)
+		}
+		if err != nil {
+			infraGit.ReportProgress(ctx, fmt.Sprintf("Quality kit not built for %s: %v", mem.Repo, err))
+			continue
+		}
+		for _, c := range built.Checklists {
+			if !seenList[c.Path] {
+				seenList[c.Path] = true
+				kit.Checklists = append(kit.Checklists, c)
+			}
+		}
+	}
+	return kit
 }

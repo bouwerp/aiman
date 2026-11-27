@@ -757,6 +757,10 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 	for k, v := range aimanRuntimeEnv(s) {
 		env[k] = v
 	}
+	if s.IsWorkspace() {
+		TrustWorkspacePaths(ctx, remote, s.WorkingDirectory, "")
+		trustWorkspaceMembers(ctx, remote, *s)
+	}
 	WriteMuseSessionID(ctx, remote, s.WorkingDirectory, resumed, s.ID)
 	if err := CreatePTYSession(ctx, remote, PTYSpec{
 		ID:            s.ID,
@@ -771,6 +775,19 @@ func RevivePTYSession(ctx context.Context, remote TerminalExecutor, s *domain.Se
 		return err
 	}
 	return nil
+}
+
+// trustWorkspaceMembers adds safe.directory for each member worktree of a
+// workspace session: every member is its own git repository, and the agent
+// runs git in them from the workspace directory. Other sessions are left
+// alone.
+func trustWorkspaceMembers(ctx context.Context, remote TerminalExecutor, s domain.Session) {
+	for _, mem := range s.Members {
+		if mem.WorktreePath == "" {
+			continue
+		}
+		_, _ = remote.Execute(ctx, "git config --global --add safe.directory "+shellx.Quote(mem.WorktreePath))
+	}
 }
 
 // ReviveOptions carries the launch settings revive cannot read from the

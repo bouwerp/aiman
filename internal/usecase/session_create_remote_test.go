@@ -298,3 +298,37 @@ func TestRegisterSessionsOnRemoteReturnsForgotten(t *testing.T) {
 		t.Fatalf("forgotten = %v", forgotten)
 	}
 }
+
+func TestCreateSessionOnRemoteSendsRepos(t *testing.T) {
+	r := &createRemote{out: okCreateResponse}
+	_, err := CreateSessionOnRemote(context.Background(), r, RemoteCreateSpec{
+		Repo: "ignored/x", Branch: "b",
+		Repos: []domain.RepoSpec{{Repo: "o/a"}, {Repo: "o/b", Base: "dev"}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var body string
+	for _, v := range r.written {
+		body = string(v)
+	}
+	if !strings.Contains(body, `"repos":[{"repo":"o/a"},{"base":"dev","repo":"o/b"}]`) {
+		t.Errorf("repos not sent: %s", body)
+	}
+	if strings.Contains(body, `"repo":"ignored/x"`) {
+		t.Errorf("repo sent beside repos: %s", body)
+	}
+}
+
+func TestParseRemoteCreateResultCarriesMembers(t *testing.T) {
+	out := `{"type":"session","session":{"id":"ws-1","branch":"host-tab","worktree_path":"/w/host-tab@ws","repos":[` +
+		`{"repo":"o/a","branch":"host-tab","base_branch":"origin/main","worktree_path":"/w/host-tab@ws/a"},` +
+		`{"repo":"o/b","branch":"host-tab","base_branch":"develop","worktree_path":"/w/host-tab@ws/b"}]}}`
+	s, err := parseRemoteCreateResult(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.IsWorkspace() || len(s.Members) != 2 || s.Members[1] != (domain.SessionRepo{Repo: "o/b", Branch: "host-tab", BaseBranch: "develop", WorktreePath: "/w/host-tab@ws/b", Ord: 1}) {
+		t.Fatalf("members = %+v", s.Members)
+	}
+}

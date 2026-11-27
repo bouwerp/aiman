@@ -25,6 +25,15 @@ const (
 // ReviewRef is the to-do Ref that links an item to a review comment.
 func ReviewRef(id int64) string { return "review:" + strconv.FormatInt(id, 10) }
 
+// ReviewRefRepo is ReviewRef for a workspace member: review:<slug>:<id>. repo
+// "" is a plain session's ref.
+func ReviewRefRepo(repo string, id int64) string {
+	if repo == "" {
+		return ReviewRef(id)
+	}
+	return "review:" + repo + ":" + strconv.FormatInt(id, 10)
+}
+
 // viewerLogin returns the gh login, fetched once. An error leaves it unknown
 // so the next poll asks again.
 func (w *Watcher) viewerLogin(ctx context.Context) string {
@@ -72,14 +81,14 @@ func (w *Watcher) trustedLogin(author string) bool {
 // to-do and a note. The agent's own replies and comments older than the watch
 // are marked seen without steering; an untrusted author's comment is marked seen
 // and recorded, also without steering.
-func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, st domain.PRWatchState, pr PRView) error {
+func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, t target, st domain.PRWatchState, pr PRView) error {
 	// Without the viewer the agent's own replies cannot be told apart, so
 	// nothing is processed until it is known.
 	viewer := w.viewerLogin(ctx)
 	if viewer == "" {
 		return nil
 	}
-	comments, err := w.d.GitHub.ReviewComments(ctx, sessionDir(s), pr.Number)
+	comments, err := w.d.GitHub.ReviewComments(ctx, t.dir, pr.Number)
 	if err != nil {
 		return err
 	}
@@ -106,7 +115,7 @@ func (w *Watcher) reactToComments(ctx context.Context, s domain.Session, st doma
 			ignored = append(ignored, c)
 			continue
 		}
-		if err := w.addReviewTodo(ctx, s, pr, c); err != nil {
+		if err := w.addReviewTodo(ctx, s, t, pr, c); err != nil {
 			return err
 		}
 	}
@@ -156,8 +165,8 @@ func logIgnoredComment(sessionID string, c ReviewComment, why string) {
 	log.Printf("ciwatch: session %s ignored review comment %d by %q (association %q): not on the ledger: %s", sessionID, c.ID, c.Author, c.Association, why)
 }
 
-func (w *Watcher) addReviewTodo(ctx context.Context, s domain.Session, pr PRView, c ReviewComment) error {
-	ref := ReviewRef(c.ID)
+func (w *Watcher) addReviewTodo(ctx context.Context, s domain.Session, t target, pr PRView, c ReviewComment) error {
+	ref := ReviewRefRepo(t.repo, c.ID)
 	where := c.Path
 	if c.Line != 0 {
 		where = fmt.Sprintf("%s:%d", c.Path, c.Line)
@@ -183,7 +192,7 @@ func (w *Watcher) addReviewTodo(ctx context.Context, s domain.Session, pr PRView
 		return err
 	}
 	item, _ := openTodoByRef(list, ref)
-	note := fmt.Sprintf("[aiman] New review comment on PR #%d at %s by @%s, to-do %s:\n%s", pr.Number, where, c.Author, item.ID, truncateBody(c.Body))
+	note := fmt.Sprintf("[aiman] New review comment on %s at %s by @%s, to-do %s:\n%s", t.prName(pr.Number), where, c.Author, item.ID, truncateBody(c.Body))
 	w.d.Steer(s.ID, domain.AuthorAiman, note)
 	return nil
 }

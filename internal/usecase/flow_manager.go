@@ -437,6 +437,10 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 		CreatedAt:      time.Now(),
 	}
 
+	if len(config.Workspace) > 0 {
+		return m.createWorkspaceSession(ctx, sshMgr, config, session)
+	}
+
 	// Step 6: Isolate (Worktree)
 	wt, err := m.resolveWorktree(ctx, sshMgr, config, branch)
 	if err != nil {
@@ -542,8 +546,19 @@ func (m *FlowManager) CreateSession(ctx context.Context, config domain.SessionCo
 func (m *FlowManager) finaliseCreate(ctx context.Context, sshMgr domain.RemoteExecutor, session *domain.Session, config domain.SessionConfig, kit domain.QualityKit, workingDir string) (*domain.Session, error) {
 	// The graph build runs detached once the agent is up, so it never holds
 	// the create; the script is a no-op without graphify or a git checkout.
-	if session.WorktreePath != "" {
-		if _, err := sshMgr.Execute(ctx, graphify.BackgroundUpdateScript(session.WorktreePath)); err != nil {
+	// A workspace directory is no checkout, so each member gets its own.
+	graphRoots := []string{session.WorktreePath}
+	if session.IsWorkspace() {
+		graphRoots = graphRoots[:0]
+		for _, mem := range session.Members {
+			graphRoots = append(graphRoots, mem.WorktreePath)
+		}
+	}
+	for _, root := range graphRoots {
+		if root == "" {
+			continue
+		}
+		if _, err := sshMgr.Execute(ctx, graphify.BackgroundUpdateScript(root)); err != nil {
 			infraGit.ReportProgress(ctx, fmt.Sprintf("graphify update not started: %v", err))
 		}
 	}

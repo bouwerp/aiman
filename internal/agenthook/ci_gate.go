@@ -58,6 +58,9 @@ type GateQuestion struct {
 	Kind    string
 	Command string
 	Draft   bool
+	// Repo is the owner/name a gh pr call names with -R, --repo or
+	// --repo=; empty for a push and for a gh call that names none.
+	Repo string
 }
 
 // GateQuestionFor reads tool_input.command from a Claude PreToolUse payload
@@ -70,14 +73,21 @@ func GateQuestionFor(payload []byte) (GateQuestion, bool) {
 			Command string `json:"command"`
 		} `json:"tool_input"`
 	}
-	if err := json.Unmarshal(payload, &p); err != nil || strings.TrimSpace(p.ToolInput.Command) == "" {
+	if err := json.Unmarshal(payload, &p); err != nil {
 		return GateQuestion{}, false
 	}
-	command := p.ToolInput.Command
+	return GateQuestionForCommand(p.ToolInput.Command)
+}
+
+// GateQuestionForCommand is GateQuestionFor for a bare shell command.
+func GateQuestionForCommand(command string) (GateQuestion, bool) {
+	if strings.TrimSpace(command) == "" {
+		return GateQuestion{}, false
+	}
 	var found GateQuestion
 	ok := false
 	for _, words := range simpleCommands(command) {
-		kind, draft := classifyCommand(words)
+		kind, draft, repo := classifyCommand(words)
 		if kind == "" {
 			continue
 		}
@@ -85,27 +95,53 @@ func GateQuestionFor(payload []byte) (GateQuestion, bool) {
 			return GateQuestion{Kind: kind, Command: command}, true
 		}
 		if !ok {
-			found, ok = GateQuestion{Kind: kind, Command: command, Draft: draft}, true
+			found, ok = GateQuestion{Kind: kind, Command: command, Draft: draft, Repo: repo}, true
 		}
 	}
 	return found, ok
 }
 
-// classifyCommand names the gate kind of one simple command.
-func classifyCommand(words []string) (kind string, draft bool) {
+// classifyCommand names the gate kind of one simple command and, for gh,
+// the repository it names.
+func classifyCommand(words []string) (kind string, draft bool, repo string) {
 	words = dropAssignments(words)
 	if len(words) == 0 {
-		return "", false
+		return "", false, ""
 	}
 	switch path.Base(words[0]) {
 	case "git":
 		if sub := afterGlobalFlags(words[1:], gitValueFlags); len(sub) > 0 && sub[0] == "push" {
-			return GateKindPush, false
+			return GateKindPush, false, ""
 		}
 	case "gh":
-		return classifyGH(afterGlobalFlags(words[1:], ghValueFlags))
+		kind, draft = classifyGH(afterGlobalFlags(words[1:], ghValueFlags))
+		if kind != "" {
+			repo = ghRepoFlag(words[1:])
+		}
+		return kind, draft, repo
 	}
-	return "", false
+	return "", false, ""
+}
+
+// ghRepoFlag returns the value of gh's -R, --repo or --repo= option, before
+// or after the subcommand; the last one wins, as in gh.
+func ghRepoFlag(words []string) string {
+	repo := ""
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case w == "--":
+			return repo
+		case (w == "-R" || w == "--repo") && i+1 < len(words):
+			repo = words[i+1]
+			i++
+		case strings.HasPrefix(w, "--repo="):
+			repo = strings.TrimPrefix(w, "--repo=")
+		case strings.HasPrefix(w, "-R") && len(w) > 2:
+			repo = strings.TrimPrefix(strings.TrimPrefix(w, "-R"), "=")
+		}
+	}
+	return repo
 }
 
 func classifyGH(sub []string) (kind string, draft bool) {

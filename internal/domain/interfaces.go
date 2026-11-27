@@ -62,6 +62,9 @@ type WorktreeRecord struct {
 	// AimanID is the id read from <git-dir>/aiman-id, or empty when the
 	// worktree carries no aiman metadata.
 	AimanID string
+	// Workspace is the session id read from <git-dir>/aiman-workspace: the
+	// worktree is a member of that workspace session, not a session itself.
+	Workspace string
 }
 
 // BatchDiscovery is an optional capability a RemoteExecutor may implement to

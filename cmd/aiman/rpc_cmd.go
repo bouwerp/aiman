@@ -21,6 +21,7 @@ var rpcMethods = map[string]bool{
 	"session.move":        true,
 	"session.pin":         true,
 	"session.rename":      true,
+	"session.terminate":   true,
 	"session.get":         true,
 	"session.log":         true,
 	"todo.get":            true,

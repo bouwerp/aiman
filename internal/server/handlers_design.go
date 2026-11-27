@@ -67,15 +67,21 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 			key = reviewBriefKey(sess.ReviewPR)
 		}
 	}
+	slug, gitDir := sess.RepoName, gitDirOf(wd)
+	if sess.IsWorkspace() {
+		// A workspace directory is no checkout: the page belongs to the
+		// first member's repository.
+		slug, gitDir = sess.Members[0].Repo, gitDirOf(sess.Members[0].WorktreePath)
+	}
 	var res design.Result
 	if !s.designer.HasRepo() && s.artifacts != nil {
 		var resp *Response
-		res, resp = s.publishDesignArtifact(ctx, req.ID, sess, md, repoBase(sess.RepoName), key)
+		res, resp = s.publishDesignArtifact(ctx, req.ID, sess, md, repoBase(slug), key)
 		if resp != nil {
 			return *resp
 		}
 	} else {
-		res, err = s.designer.PublishBytes(ctx, md, gitDirOf(wd), repoBase(sess.RepoName), key)
+		res, err = s.designer.PublishBytes(ctx, md, gitDir, repoBase(slug), key)
 		if errors.Is(err, design.ErrInvalid) {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}

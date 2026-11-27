@@ -77,6 +77,8 @@ type SessionInfo struct {
 	// Tunnels are laptop↔remote forwards; review.debug fills them with the
 	// host-published debug ports so the TUI can forward them.
 	Tunnels []domain.Tunnel `json:"tunnels,omitempty"`
+	// Repos are a workspace session's member repositories, in order.
+	Repos []SessionRepoInfo `json:"repos,omitempty"`
 	// Limits is what is left of the allowance of the provider this session's
 	// agent runs on. Only session.get fills it, and it is absent when the agent
 	// has no source or the source has not finished its first run.
@@ -114,6 +116,7 @@ func sessionInfo(s domain.Session, callerID string) SessionInfo {
 		State:            string(domain.AgentStateUnknown),
 		Ended:            s.AgentEnded,
 		Tunnels:          s.Tunnels,
+		Repos:            repoInfos(s.Members),
 		Self:             callerID != "" && callerID == s.ID,
 	}
 }
@@ -1025,8 +1028,11 @@ type createParams struct {
 	Orphan bool   `json:"orphan"`
 	Quick  bool   `json:"quick"`
 	Repo   string `json:"repo"`
-	Branch string `json:"branch"`
-	Agent  string `json:"agent"`
+	// Repos makes a workspace session over 2 to 8 repositories, exclusive
+	// with Repo, Quick, Review, Consult, ExistingBranch and Dir.
+	Repos  []repoParam `json:"repos"`
+	Branch string      `json:"branch"`
+	Agent  string      `json:"agent"`
 	// Tier is the model tier to launch from: "smart" or "worker". It is
 	// exclusive with Agent. Empty means smart for a session the user starts
 	// and worker for one created inside a session.
@@ -1080,6 +1086,10 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
+	workspace, werr := params.workspaceSpecs()
+	if werr != nil {
+		return errResp(req.ID, CodeInvalidParams, werr.Error())
+	}
 	existing, err := s.loadSessions(ctx)
 	if err != nil {
 		return errResp(req.ID, CodeInvalidParams, err.Error())
@@ -1102,7 +1112,11 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		}
 		forParent = &parent
 	}
-	if !params.Quick && (params.Repo == "" || (params.Branch == "" && (params.Name == "" || params.ExistingBranch))) {
+	if workspace != nil {
+		// A for-child's defaults name the parent's single repository.
+		params.Repo, params.Base = "", ""
+	}
+	if !params.Quick && ((params.Repo == "" && workspace == nil) || (params.Branch == "" && (params.Name == "" || params.ExistingBranch))) {
 		return errResp(req.ID, CodeInvalidParams, "repo and a name or branch are required (or --quick)")
 	}
 	brief, berr := readBrief(params.Brief, params.BriefFile, false)
@@ -1165,6 +1179,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		Tier:           sessionTier,
 		BudgetTokens:   params.BudgetTokens,
 		Repo:           domain.Repo{Name: params.Repo},
+		Workspace:      workspace,
 		ExistingBranch: params.ExistingBranch,
 	}
 	var caller *domain.Session
@@ -1209,6 +1224,12 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 		if err := s.repo.Save(ctx, sess); err != nil {
 			return errResp(req.ID, CodeCreateFailed, err.Error())
 		}
+		if err := s.saveMembers(ctx, sess); err != nil {
+			if derr := s.discardChild(ctx, *sess); derr != nil {
+				log.Printf("session.create: discard workspace %s: %v", sess.ID, derr)
+			}
+			return errResp(req.ID, CodeCreateFailed, err.Error())
+		}
 	}
 	if forParent != nil {
 		if err := s.linkChild(ctx, forParent.ID, params.For, sess.ID); err != nil {
@@ -1222,7 +1243,7 @@ func (s *Server) handleCreate(ctx context.Context, req Request) Response {
 	}
 	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventSessionCreated, map[string]any{
 		"name": name, "group": group, "repo": params.Repo, "branch": params.Branch,
-		"agent": params.Agent, "quick": params.Quick,
+		"agent": params.Agent, "quick": params.Quick, "repos": repoInfos(sess.Members),
 		"tier": sessionTier, "requested_tier": requestedTier,
 		"model": launchModel, "effort": launchEffort, "tier_fallback": tierFallback,
 	})
@@ -1346,6 +1367,9 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 	parent, ok := resolveSession(existing, parentID)
 	if !ok {
 		return domain.Session{}, CodeNotFound, fmt.Errorf("parent session %s not found", parentID)
+	}
+	if parent.IsWorkspace() {
+		return domain.Session{}, CodeInvalidParams, fmt.Errorf("session %s is a multi-repo session: --for does not support one yet", parent.Name)
 	}
 	if parent.Branch == "" {
 		return domain.Session{}, CodeInvalidParams, fmt.Errorf("parent session %s has no branch to cut a child from", parent.Name)
@@ -1488,14 +1512,17 @@ func (s *Server) handleRename(ctx context.Context, req Request) Response {
 // The handover is written first. A failed write is logged and the row is
 // still deleted.
 // discardChild undoes a create that cannot stand: it stops the terminal on
-// either backend, removes the worktree and branch the create made, then
+// either backend, removes the worktree and branch the create made (each
+// member's for a workspace session), then
 // drops the row. Each step is best effort so a partial failure still frees
 // the name for a retry.
 func (s *Server) discardChild(ctx context.Context, sess domain.Session) error {
 	if err := (serverTerminal{s}).Stop(ctx, sess); err != nil {
 		log.Printf("session.create: stop %s: %v", sess.ID, err)
 	}
-	if s.remote != nil && sess.WorktreePath != "" {
+	if sess.IsWorkspace() {
+		s.discardMembers(ctx, sess)
+	} else if s.remote != nil && sess.WorktreePath != "" {
 		if _, err := s.remote.Execute(ctx, discardWorktreeScript(sess.WorktreePath, sess.Branch)); err != nil {
 			log.Printf("session.create: remove worktree of %s: %v", sess.ID, err)
 		}
@@ -1792,8 +1819,13 @@ func registrableSession(in domain.Session, existing *domain.Session) domain.Sess
 	out.MutagenSyncID = ""
 	out.Tunnels = nil
 	out.AWSConfig = nil
+	out.Members = nil
 	if existing == nil {
 		return out
+	}
+	if existing.IsWorkspace() {
+		// A workspace row has no single repository; the laptop may guess one.
+		out.RepoName = ""
 	}
 	out.HookState = existing.HookState
 	out.HookStateMessage = existing.HookStateMessage

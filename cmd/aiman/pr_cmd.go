@@ -13,7 +13,7 @@ func runPR(args []string, getenv func(string) string) error {
 }
 
 func prUsage() error {
-	fmt.Fprintf(os.Stderr, "Usage: aiman pr ready [--session NAME]\n")
+	fmt.Fprintf(os.Stderr, "Usage: aiman pr ready [--session NAME] [--repo OWNER/NAME]\n")
 	fmt.Fprintf(os.Stderr, "Marks the session's PR ready once the tree is clean, HEAD is pushed and the PR's head, and the local gate (and verify, when on) passed for HEAD.\n")
 	fmt.Fprintf(os.Stderr, "--session defaults to $AIMAN_ID; one of them is required.\n")
 	return errUsage
@@ -36,7 +36,14 @@ func prMain(args []string, getenv func(string) string, call ciCaller, out io.Wri
 	if session == "" {
 		return prUsage()
 	}
-	raw, err := call("ci.ready", map[string]any{"session": session})
+	params := map[string]any{"session": session}
+	if repo := strings.TrimSpace(flags["repo"]); repo != "" {
+		params["repo"] = repo
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		params["cwd"] = cwd
+	}
+	raw, err := call("ci.ready", params)
 	if err != nil {
 		return err
 	}

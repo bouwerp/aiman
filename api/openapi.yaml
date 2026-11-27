@@ -333,6 +333,23 @@ components:
           description: The ref the session's branch was cut from.
         repo_name:
           type: string
+        repos:
+          type: array
+          description: >
+            A workspace session's member repositories, in order; absent for a
+            single-repo session.
+          items:
+            type: object
+            required: [repo]
+            properties:
+              repo:
+                type: string
+              branch:
+                type: string
+              base_branch:
+                type: string
+              worktree_path:
+                type: string
         tmux_session:
           type: string
           description: Terminal name; key kept for compatibility.
@@ -1021,7 +1038,26 @@ components:
           description: Launch effort, with the same rules as model.
         repo:
           type: string
-          description: session.create, owner/name from repo.list. Required unless quick.
+          description: session.create, owner/name from repo.list. Required unless quick or repos.
+        repos:
+          type: array
+          minItems: 2
+          maxItems: 8
+          description: >
+            session.create, a workspace session over 2 to 8 repositories with
+            one worktree each on the same branch. Repos are unique ignoring
+            case. Exclusive with repo, quick, review, consult, existing_branch
+            and dir; any of those, or a bad repo or base, is invalid_params.
+          items:
+            type: object
+            required: [repo]
+            properties:
+              repo:
+                type: string
+                description: owner/name.
+              base:
+                type: string
+                description: Ref to cut this repo's branch from; empty is its default branch.
         branch:
           type: string
           description: session.create. Empty derives it from name, adding a suffix if that worktree exists. A branch or a name is required unless quick.

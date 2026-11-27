@@ -57,6 +57,9 @@ type Session struct {
 	Group    string // work bucket; empty persists as GroupUngrouped
 	ParentID string // session that spawned this one; empty is a root
 	Role     SessionRole
+	// Members are the repositories of a workspace session, in Ord order. They
+	// live in their own table; Save neither reads nor writes them.
+	Members []SessionRepo
 	// Pinned lifts the session, with its descendants, into the Pinned section
 	// at the top of the TUI list. Save never writes it; SetPinned does.
 	Pinned           bool
@@ -301,6 +304,10 @@ type SessionConfig struct {
 	Issue     *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
 	Branch    string
 	Repo      Repo
+	// Workspace lists the repositories of a multi-repo session, in order;
+	// when set, Repo is empty and CreateSession makes one worktree per entry
+	// under a workspace directory.
+	Workspace []RepoSpec
 	Directory string
 	Agent     *Agent
 	// Tier is the model tier Agent was picked from; empty for an explicit

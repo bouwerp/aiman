@@ -36,6 +36,9 @@ type detailMetaExtras struct {
 	VerifyAdvisory bool
 	WatchingPR     int
 	Limits         *limits.Reading // what is left at the session's provider
+	// Members is a workspace session's git status per member, keyed by the
+	// member's WorktreePath.
+	Members map[string]domain.GitStatus
 }
 
 // todoView is one session's to-do list as the detail pane draws it.
@@ -74,6 +77,11 @@ func renderMetaLine(s domain.Session, x detailMetaExtras, now time.Time, width i
 		add(shortElapsed(now.Sub(s.CreatedAt)))
 	}
 	add(s.Branch)
+	if s.IsWorkspace() {
+		for _, p := range workspaceMemberParts(s, x.Members) {
+			add(p)
+		}
+	}
 	if ref, err := review.ParseRef(s.ReviewPR); err == nil {
 		add(fmt.Sprintf("review #%d", ref.Number))
 	}
