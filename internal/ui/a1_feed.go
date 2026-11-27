@@ -142,13 +142,13 @@ func (m *Model) feedPanelLimit() int {
 	return feedPanelRows
 }
 
-// feedBadge is the header's "feed N (M high)", red while M > 0; "" with no
-// open action.
+// feedBadge is the header's "feed N (M high)", red while M > 0, and a dim
+// "feed 0" while a host has the feed on with nothing open; "" with no feed.
 func (m *Model) feedBadge() string {
-	open, high := m.feedCounts()
-	if open == 0 {
+	if len(m.feedHosts()) == 0 {
 		return ""
 	}
+	open, high := m.feedCounts()
 	if high > 0 {
 		return lipgloss.NewStyle().Foreground(feedRed).Render(fmt.Sprintf("feed %d (%d high)", open, high))
 	}
@@ -170,7 +170,7 @@ func (m *Model) renderFeedPanel(width int) string {
 		return dim.Render(truncatePlain("feed: nothing to do · "+last+m.feedErrNote(), width))
 	}
 	focused := m.focus == focusFeed
-	right := " ctrl+f · F full page ─"
+	right := " ctrl+e · F full page ─"
 	if focused {
 		right = " focused ─"
 	}
