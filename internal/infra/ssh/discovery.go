@@ -52,7 +52,11 @@ find "$root" -maxdepth 3 -name .git -type d -prune 2>/dev/null | while IFS= read
       id=$(cat "$wt/.aiman-id" 2>/dev/null)
       mv "$wt/.aiman-id" "$adir/aiman-id" 2>/dev/null || true
     fi
-    printf '` + worktreeRecordTag + `\t%s\t%s\tok\t%s\n' "$repo" "$wt" "$id"
+    ws=''
+    if [ -f "$adir/` + domain.WorkspaceMarkerFile + `" ]; then
+      ws=$(cat "$adir/` + domain.WorkspaceMarkerFile + `" 2>/dev/null)
+    fi
+    printf '` + worktreeRecordTag + `\t%s\t%s\tok\t%s\t%s\n' "$repo" "$wt" "$id" "$ws"
   done
 done`
 }
@@ -97,12 +101,16 @@ func parseWorktreeRecords(out string) []domain.WorktreeRecord {
 		default:
 			continue
 		}
-		records = append(records, domain.WorktreeRecord{
+		rec := domain.WorktreeRecord{
 			RepoPath:     repo,
 			WorktreePath: wt,
 			State:        state,
 			AimanID:      strings.TrimSpace(parts[4]),
-		})
+		}
+		if len(parts) > 5 {
+			rec.Workspace = strings.TrimSpace(parts[5])
+		}
+		records = append(records, rec)
 	}
 	return records
 }

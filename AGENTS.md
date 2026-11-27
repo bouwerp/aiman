@@ -140,6 +140,8 @@ A `domain.Session` holds:
 | `FixPR` | `owner/repo#n` for a fixer session (role `fixer`, visible) pushing to that PR's branch. The fixer never holds `ReviewPR`. The TUI refuses `c` for it, verify-before-PR skips it, and the meta line shows `fix #n` |
 | `AWSProfileName` | legacy scoped AWS profile name retained only for migration/cleanup |
 
+A workspace (multi-repo) session also has `Members []SessionRepo` (`repo`, `branch`, `base_branch`, `worktree_path`, `ord`), stored in sqlite `session_repos` and written only by `SetSessionRepos`; `Save` never reads or writes them, `Get`/`List` fill them in `ord` order and `Delete` removes them with the row. `IsWorkspace()` is `len(Members) > 0` and `MemberFor(path)` finds the member containing a path. Each member worktree carries `<git-dir>/aiman-workspace` holding the session id; the worktree scan reports it as `WorktreeRecord.Workspace` and discovery never makes a session or an orphan offer from such a record.
+
 ---
 
 ## SQLite Persistence — Critical Design Decision
