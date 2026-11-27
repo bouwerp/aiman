@@ -36,6 +36,13 @@ type Evidence struct {
 	Files       []string
 }
 
+// RepoDiff is one workspace member's diff stat against its own base.
+type RepoDiff struct {
+	Repo       string // owner/name
+	BaseBranch string
+	DiffStat   string // "" renders "(unavailable)"
+}
+
 // Input is the data a handover note is rendered from.
 // Render does not read git, the pane, or the clock.
 type Input struct {
@@ -47,6 +54,7 @@ type Input struct {
 	Todos        *domain.TodoList // nil: no list
 	Undelivered  []string         // steering note texts, oldest first
 	DiffStat     string           // "" renders "(unavailable)"
+	RepoDiffs    []RepoDiff       // a workspace session's members; replaces DiffStat when set
 	HookTitle    string
 	HookMessage  string
 	Blocked      string // waiting_input reason, "" renders "none"
@@ -201,9 +209,16 @@ func criticalContext(in Input) string {
 
 func evidence(in Input) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Diff (git diff --stat %s):\n", in.BaseBranch)
-	b.WriteString(evidenceBlock(diffStat(in.DiffStat)))
-	b.WriteString("\n\n")
+	if len(in.RepoDiffs) == 0 {
+		fmt.Fprintf(&b, "Diff (git diff --stat %s):\n", in.BaseBranch)
+		b.WriteString(evidenceBlock(diffStat(in.DiffStat)))
+		b.WriteString("\n\n")
+	}
+	for _, d := range in.RepoDiffs {
+		fmt.Fprintf(&b, "Diff %s (git diff --stat %s):\n", d.Repo, d.BaseBranch)
+		b.WriteString(evidenceBlock(diffStat(d.DiffStat)))
+		b.WriteString("\n\n")
+	}
 	fmt.Fprintf(&b, "Last screen (%d lines):\n", PaneLines)
 	b.WriteString(evidenceBlock(in.PaneTail))
 	writeEvidenceField(&b, "Test command", in.Evidence.TestCommand)

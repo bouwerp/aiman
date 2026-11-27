@@ -3,6 +3,8 @@ package ciwatch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,6 +29,12 @@ type Store interface {
 	SeenComments(ctx context.Context, sessionID string) (map[int64]bool, error)
 	MarkCommentsSeen(ctx context.Context, sessionID string, ids []int64) error
 	ResetPRWatch(ctx context.Context, sessionID string) error
+	// The *Repo forms key the state by (session, repo); repo "" is a plain
+	// session and means the same rows as the forms above.
+	LoadPRWatchRepo(ctx context.Context, sessionID, repo string) (domain.PRWatchState, error)
+	RecordCheckFailureRepo(ctx context.Context, sessionID, repo, check, sha string) (int, error)
+	MarkCheckEscalatedRepo(ctx context.Context, sessionID, repo, check string, at time.Time) (bool, error)
+	ClearCheckRepo(ctx context.Context, sessionID, repo, check string) error
 }
 
 // Sessions lists the sessions serve knows about.
@@ -166,6 +174,12 @@ func (w *Watcher) Status(ctx context.Context, sessionID string) (domain.PRWatchS
 	return w.d.State.LoadPRWatch(ctx, sessionID)
 }
 
+// StatusRepo is the stored watcher state of one member of a workspace
+// session; repo "" is the plain session's state.
+func (w *Watcher) StatusRepo(ctx context.Context, sessionID, repo string) (domain.PRWatchState, error) {
+	return w.d.State.LoadPRWatchRepo(ctx, sessionID, repo)
+}
+
 // Forget drops every CI row for a session.
 func (w *Watcher) Forget(ctx context.Context, sessionID string) error {
 	w.mu.Lock()
@@ -173,7 +187,7 @@ func (w *Watcher) Forget(ctx context.Context, sessionID string) error {
 	return w.d.State.ResetPRWatch(ctx, sessionID)
 }
 
-// sessionDir is where gh runs for a session.
+// sessionDir is where gh runs for a plain session.
 func sessionDir(s domain.Session) string {
 	if s.WorktreePath != "" {
 		return s.WorktreePath
@@ -181,27 +195,68 @@ func sessionDir(s domain.Session) string {
 	return s.WorkingDirectory
 }
 
+// target is one PR the watcher reads for a session: a plain session's, or
+// one workspace member's. repo is "" for a plain session; dir is where gh runs.
+type target struct {
+	repo string
+	dir  string
+}
+
+// targets lists what a session's poll reads: each member of a workspace
+// session in Ord order, never the workspace directory, else the session's
+// own directory.
+func targets(s domain.Session) []target {
+	if !s.IsWorkspace() {
+		return []target{{dir: sessionDir(s)}}
+	}
+	members := append([]domain.SessionRepo(nil), s.Members...)
+	sort.SliceStable(members, func(i, j int) bool { return members[i].Ord < members[j].Ord })
+	out := make([]target, 0, len(members))
+	for _, m := range members {
+		out = append(out, target{repo: m.Repo, dir: m.WorktreePath})
+	}
+	return out
+}
+
 // errNoDir refuses a poll that would run gh in serve's own directory and so
 // read whichever repository that happens to be.
 var errNoDir = errors.New("session has no worktree or working directory")
 
-// PollSession reads the session's PR once and reacts to it. A failure is
-// recorded as LastError and returned; a gh failure reading the PR changes
-// nothing else.
+// PollSession reads the session's PR once, or each member's PR of a
+// workspace session, and reacts to it. A failure is recorded as that PR's
+// LastError and returned; one member's failure does not stop the others.
 func (w *Watcher) PollSession(ctx context.Context, s domain.Session) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	st, err := w.d.State.LoadPRWatch(ctx, s.ID)
+	var errs []error
+	for _, t := range targets(s) {
+		if ctx.Err() != nil {
+			errs = append(errs, ctx.Err())
+			break
+		}
+		if err := w.pollTarget(ctx, s, t); err != nil {
+			if t.repo != "" {
+				err = fmt.Errorf("%s: %w", t.repo, err)
+			}
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// pollTarget reads one PR and reacts to it. A gh failure reading the PR
+// changes nothing but its LastError.
+func (w *Watcher) pollTarget(ctx context.Context, s domain.Session, t target) error {
+	st, err := w.d.State.LoadPRWatchRepo(ctx, s.ID, t.repo)
 	if err != nil {
 		return err
 	}
 	st.LastPolledAt = w.d.Now()
-	dir := sessionDir(s)
-	if dir == "" {
+	if t.dir == "" {
 		return w.fail(ctx, st, errNoDir)
 	}
-	pr, err := w.d.GitHub.PRView(ctx, dir)
+	pr, err := w.d.GitHub.PRView(ctx, t.dir)
 	switch {
 	case errors.Is(err, ErrNoPR):
 		st.PRNumber, st.PRState, st.HeadSHA, st.LastError = 0, "", "", ""
@@ -216,21 +271,29 @@ func (w *Watcher) PollSession(ctx context.Context, s domain.Session) error {
 	if pr.State != "OPEN" {
 		return nil
 	}
-	if err := w.reactToChecks(ctx, s, pr); err != nil {
+	if err := w.reactToChecks(ctx, s, t, pr); err != nil {
 		return w.fail(ctx, st, err)
 	}
-	if err := w.reactToComments(ctx, s, st, pr); err != nil {
+	if err := w.reactToComments(ctx, s, t, st, pr); err != nil {
 		return w.fail(ctx, st, err)
 	}
 	return nil
 }
 
-// fail stores err as the session's LastError, so ci.get can say why the
-// watch stopped making progress, and returns it.
+// fail stores err as the PR's LastError, so ci.get can say why the watch
+// stopped making progress, and returns it.
 func (w *Watcher) fail(ctx context.Context, st domain.PRWatchState, err error) error {
 	st.LastError = err.Error()
 	if serr := w.d.State.SavePRWatch(ctx, st); serr != nil {
 		return errors.Join(err, serr)
 	}
 	return err
+}
+
+// prName names a PR in notes: "PR #n", or "o/b PR #n" for a member.
+func (t target) prName(number int) string {
+	if t.repo == "" {
+		return fmt.Sprintf("PR #%d", number)
+	}
+	return fmt.Sprintf("%s PR #%d", t.repo, number)
 }

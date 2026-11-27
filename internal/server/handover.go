@@ -10,7 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +21,7 @@ import (
 	"github.com/bouwerp/aiman/internal/handoverchild"
 	"github.com/bouwerp/aiman/internal/memoryjob"
 	"github.com/bouwerp/aiman/internal/pane"
+	"github.com/bouwerp/aiman/internal/shellx"
 )
 
 // HandoverRestartNote is the steer text queued when a handover file is already
@@ -377,8 +378,15 @@ func (s *Server) handoverInput(ctx context.Context, sess domain.Session, reason,
 	// is still a successful write.
 	pane := s.handoverPane(ctx, sess)
 	stat := ""
+	var repoDiffs []handover.RepoDiff
 	if s.remote != nil {
-		stat = diffStat(ctx, s.remote, dir, base)
+		if sess.IsWorkspace() {
+			// The workspace directory is not a git repository: diff each
+			// member in its own worktree against its own base.
+			repoDiffs = memberDiffStats(ctx, s.remote, sess.Members)
+		} else {
+			stat = diffStat(ctx, s.remote, dir, base)
+		}
 	}
 	return handover.Input{
 		Label:       handoverLabel(sess),
@@ -389,6 +397,7 @@ func (s *Server) handoverInput(ctx context.Context, sess domain.Session, reason,
 		Todos:       s.handoverTodos(sess.ID),
 		Undelivered: s.handoverUndelivered(sess.ID),
 		DiffStat:    stat,
+		RepoDiffs:   repoDiffs,
 		HookTitle:   sess.AgentTitle,
 		HookMessage: sess.HookStateMessage,
 		Blocked:     handoverBlocked(sess),
@@ -529,10 +538,29 @@ func diffStat(ctx context.Context, ex interface {
 		"base=%s; [ -n \"$base\" ] || base=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null) || exit 0\n"+
 		"mb=$(git merge-base \"$base\" HEAD 2>/dev/null) || exit 0\n"+
 		"git diff --stat \"$mb\"",
-		strconv.Quote(dir), strconv.Quote(base))
+		shellx.Quote(dir), shellx.Quote(base))
 	out, err := ex.Execute(ctx, cmd)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(out)
+}
+
+// memberDiffStats is one diffStat per workspace member, in Ord order, each in
+// the member's worktree against the member's base.
+func memberDiffStats(ctx context.Context, ex interface {
+	Execute(context.Context, string) (string, error)
+}, members []domain.SessionRepo) []handover.RepoDiff {
+	ms := append([]domain.SessionRepo(nil), members...)
+	sort.SliceStable(ms, func(i, j int) bool { return ms[i].Ord < ms[j].Ord })
+	out := make([]handover.RepoDiff, 0, len(ms))
+	for _, m := range ms {
+		base := strings.TrimSpace(m.BaseBranch)
+		stat := ""
+		if dir := strings.TrimSpace(m.WorktreePath); dir != "" {
+			stat = diffStat(ctx, ex, dir, base)
+		}
+		out = append(out, handover.RepoDiff{Repo: m.Repo, BaseBranch: handoverBaseLabel(base), DiffStat: stat})
+	}
+	return out
 }

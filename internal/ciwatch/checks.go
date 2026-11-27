@@ -12,6 +12,15 @@ import (
 // CheckRef is the to-do Ref that links an item to a CI check.
 func CheckRef(name string) string { return "check:" + name }
 
+// CheckRefRepo is CheckRef for a workspace member: check:<slug>:<name>. repo
+// "" is a plain session's ref.
+func CheckRefRepo(repo, name string) string {
+	if repo == "" {
+		return CheckRef(name)
+	}
+	return "check:" + repo + ":" + name
+}
+
 // openTodoByRef finds a pending or active item with ref.
 func openTodoByRef(list domain.TodoList, ref string) (domain.TodoItem, bool) {
 	for _, it := range list.Items {
@@ -26,12 +35,12 @@ func openTodoByRef(list domain.TodoList, ref string) (domain.TodoItem, bool) {
 // the run on the PR head to finish: while any check is pending, failures add
 // nothing. A finished run gets one steering note listing every failed check
 // that got a new to-do in this pass.
-func (w *Watcher) reactToChecks(ctx context.Context, s domain.Session, pr PRView) error {
+func (w *Watcher) reactToChecks(ctx context.Context, s domain.Session, t target, pr PRView) error {
 	pending := false
 	for _, c := range pr.Checks {
 		switch c.Conclusion {
 		case ConclusionSuccess:
-			if err := w.checkPassed(ctx, s, c); err != nil {
+			if err := w.checkPassed(ctx, s, t, c); err != nil {
 				return err
 			}
 		case ConclusionPending:
@@ -46,7 +55,7 @@ func (w *Watcher) reactToChecks(ctx context.Context, s domain.Session, pr PRView
 		if c.Conclusion != ConclusionFailure {
 			continue
 		}
-		f, added, err := w.checkFailed(ctx, s, pr, c)
+		f, added, err := w.checkFailed(ctx, s, t, pr, c)
 		if err != nil {
 			return err
 		}
@@ -55,7 +64,7 @@ func (w *Watcher) reactToChecks(ctx context.Context, s domain.Session, pr PRView
 		}
 	}
 	if len(failed) > 0 {
-		w.d.Steer(s.ID, domain.AuthorAiman, w.runNote(ctx, s, pr, failed))
+		w.d.Steer(s.ID, domain.AuthorAiman, w.runNote(ctx, t, pr, failed))
 	}
 	return nil
 }
@@ -68,15 +77,15 @@ type failedCheck struct {
 
 // checkPassed clears the check's attempts and closes its open to-do, so a
 // to-do the agent forgot to close cannot block later notes for that check.
-func (w *Watcher) checkPassed(ctx context.Context, s domain.Session, c Check) error {
-	if err := w.d.State.ClearCheck(ctx, s.ID, c.Name); err != nil {
+func (w *Watcher) checkPassed(ctx context.Context, s domain.Session, t target, c Check) error {
+	if err := w.d.State.ClearCheckRepo(ctx, s.ID, t.repo, c.Name); err != nil {
 		return err
 	}
 	list, err := w.d.Todos.Get(s.ID)
 	if err != nil {
 		return err
 	}
-	ref := CheckRef(c.Name)
+	ref := CheckRefRepo(t.repo, c.Name)
 	if _, open := openTodoByRef(list, ref); !open {
 		return nil
 	}
@@ -93,25 +102,24 @@ func (w *Watcher) checkPassed(ctx context.Context, s domain.Session, c Check) er
 // checkFailed records the failure and opens the check's `Fix CI` to-do.
 // added is false when a to-do for the check is already open or the check
 // has escalated; such a check stays out of the run note.
-func (w *Watcher) checkFailed(ctx context.Context, s domain.Session, pr PRView, c Check) (failedCheck, bool, error) {
-	n, err := w.d.State.RecordCheckFailure(ctx, s.ID, c.Name, pr.HeadSHA)
+func (w *Watcher) checkFailed(ctx context.Context, s domain.Session, t target, pr PRView, c Check) (failedCheck, bool, error) {
+	n, err := w.d.State.RecordCheckFailureRepo(ctx, s.ID, t.repo, c.Name, pr.HeadSHA)
 	if err != nil {
 		return failedCheck{}, false, err
 	}
 	if n > MaxFixAttempts {
-		return failedCheck{}, false, w.escalate(ctx, s, pr, c)
+		return failedCheck{}, false, w.escalate(ctx, s, t, pr, c)
 	}
-	id, err := w.addCheckTodo(ctx, s.ID, c.Name)
+	id, err := w.addCheckTodo(ctx, s.ID, CheckRefRepo(t.repo, c.Name), c.Name)
 	if err != nil || id == "" {
 		return failedCheck{}, false, err
 	}
 	return failedCheck{check: c, todoID: id}, true, nil
 }
 
-// addCheckTodo adds `Fix CI: <name>` unless one is open, and returns the new
-// item's id, or "" when nothing was added.
-func (w *Watcher) addCheckTodo(ctx context.Context, sessionID, name string) (string, error) {
-	ref := CheckRef(name)
+// addCheckTodo adds `Fix CI: <name>` with ref unless one is open, and returns
+// the new item's id, or "" when nothing was added.
+func (w *Watcher) addCheckTodo(ctx context.Context, sessionID, ref, name string) (string, error) {
 	list, err := w.d.Todos.Get(sessionID)
 	if err != nil {
 		return "", err
@@ -139,12 +147,12 @@ func (w *Watcher) addCheckTodo(ctx context.Context, sessionID, name string) (str
 	return item.ID, nil
 }
 
-func (w *Watcher) escalate(ctx context.Context, s domain.Session, pr PRView, c Check) error {
-	fresh, err := w.d.State.MarkCheckEscalated(ctx, s.ID, c.Name, w.d.Now())
+func (w *Watcher) escalate(ctx context.Context, s domain.Session, t target, pr PRView, c Check) error {
+	fresh, err := w.d.State.MarkCheckEscalatedRepo(ctx, s.ID, t.repo, c.Name, w.d.Now())
 	if err != nil || !fresh || w.d.Notify == nil {
 		return err
 	}
-	detail := fmt.Sprintf("CI check %s still failing after %d fix attempts on PR #%d", c.Name, MaxFixAttempts, pr.Number)
+	detail := fmt.Sprintf("CI check %s still failing after %d fix attempts on %s", c.Name, MaxFixAttempts, t.prName(pr.Number))
 	return w.d.Notify.Emit(ctx, s.ID, notify.Label(s.IssueKey, s.Name, s.ID), domain.NotifyCIEscalation, detail)
 }
 
@@ -153,12 +161,12 @@ const RunNoteEnd = "Fix every failed check, run aiman ci local --wait, then push
 
 // runNote is the one steering note for a finished run: each failed check
 // with its to-do and log tail, then the instruction to push once.
-func (w *Watcher) runNote(ctx context.Context, s domain.Session, pr PRView, failed []failedCheck) string {
+func (w *Watcher) runNote(ctx context.Context, t target, pr PRView, failed []failedCheck) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[aiman] CI run on %s (PR #%d) finished with %d failed check(s).\n", shortSHA(pr.HeadSHA), pr.Number, len(failed))
+	fmt.Fprintf(&b, "[aiman] CI run on %s (%s) finished with %d failed check(s).\n", shortSHA(pr.HeadSHA), t.prName(pr.Number), len(failed))
 	for _, f := range failed {
 		b.WriteString("\n")
-		b.WriteString(w.checkNote(ctx, s, f.check, f.todoID))
+		b.WriteString(w.checkNote(ctx, t, f.check, f.todoID))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n" + RunNoteEnd)
@@ -167,10 +175,10 @@ func (w *Watcher) runNote(ctx context.Context, s domain.Session, pr PRView, fail
 
 // checkNote is one failed check's part of the run note: the failing log
 // tail, or where to look when gh cannot give one.
-func (w *Watcher) checkNote(ctx context.Context, s domain.Session, c Check, todoID string) string {
+func (w *Watcher) checkNote(ctx context.Context, t target, c Check, todoID string) string {
 	head := fmt.Sprintf("CI check %q failed, to-do %s.\n", c.Name, todoID)
 	if c.JobID != 0 {
-		if log, err := w.d.GitHub.FailedJobLog(ctx, sessionDir(s), c.JobID); err == nil && strings.TrimSpace(log) != "" {
+		if log, err := w.d.GitHub.FailedJobLog(ctx, t.dir, c.JobID); err == nil && strings.TrimSpace(log) != "" {
 			return head + fmt.Sprintf("Last %d lines of `gh run view --job %d --log-failed`:\n", LogTailLines, c.JobID) + strings.TrimRight(log, "\n")
 		}
 	}
