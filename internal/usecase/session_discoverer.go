@@ -250,7 +250,7 @@ func (d *SessionDiscoverer) orphanSessionFromWorktreeRecord(host string, rec dom
 // review's <repo>@pr-<n> checkout. A PR checkout is never offered, while its
 // review runs (the agent runs in a scratch directory) or after it ends.
 func offerableWorktree(rec domain.WorktreeRecord) bool {
-	return rec.State == domain.WorktreeOK && !isMainWorktree(rec) && !domain.InPRWorktree(rec.WorktreePath)
+	return rec.State == domain.WorktreeOK && rec.Workspace == "" && !isMainWorktree(rec) && !domain.InPRWorktree(rec.WorktreePath)
 }
 
 // OrphanWorktreeSessions scans the whole configured repo root for every

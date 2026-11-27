@@ -57,6 +57,9 @@ type Session struct {
 	Group    string // work bucket; empty persists as GroupUngrouped
 	ParentID string // session that spawned this one; empty is a root
 	Role     SessionRole
+	// Members are the repositories of a workspace session, in Ord order. They
+	// live in their own table; Save neither reads nor writes them.
+	Members []SessionRepo
 	// Pinned lifts the session, with its descendants, into the Pinned section
 	// at the top of the TUI list. Save never writes it; SetPinned does.
 	Pinned           bool

@@ -32,6 +32,13 @@ func aimanIDReadCmd(worktreePath string) string {
 		shellx.Quote(worktreePath), shellx.Quote(worktreePath), shellx.Quote(worktreePath))
 }
 
+// workspaceMarkerReadCmd reads the workspace marker from a worktree's git dir.
+func workspaceMarkerReadCmd(worktreePath string) string {
+	return fmt.Sprintf(
+		"git_dir=$(git -C %s rev-parse --absolute-git-dir 2>/dev/null) && [ -f \"$git_dir/%s\" ] && cat \"$git_dir/%s\"",
+		shellx.Quote(worktreePath), domain.WorkspaceMarkerFile, domain.WorkspaceMarkerFile)
+}
+
 // gatherWorktreeRecords collects every registered worktree under the remote's
 // root, batched into one round trip when the executor supports it. A batch
 // failure falls back to the per-item path; if that fails too, the error
@@ -70,6 +77,9 @@ func (d *SessionDiscoverer) worktreeRecordsPerItem(ctx context.Context) ([]domai
 				rec.State = domain.WorktreeOK
 				if id, err := d.remoteExecutor.Execute(ctx, aimanIDReadCmd(normalized)); err == nil {
 					rec.AimanID = strings.TrimSpace(id)
+				}
+				if ws, err := d.remoteExecutor.Execute(ctx, workspaceMarkerReadCmd(normalized)); err == nil {
+					rec.Workspace = strings.TrimSpace(ws)
 				}
 			}
 			records = append(records, rec)
