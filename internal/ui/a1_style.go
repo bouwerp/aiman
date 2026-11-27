@@ -13,4 +13,7 @@ var (
 	a1Faint      = lipgloss.Color("#3a4240")
 	a1SelectedBg = lipgloss.Color("#222930")
 	a1BoldText   = lipgloss.Color("#eef1ee")
+	// a1Child is the child-count badge on a parent row: bright and apart from
+	// the state colours, so a session with children stands out at a glance.
+	a1Child = lipgloss.Color("#ff6fd8")
 )
