@@ -304,6 +304,10 @@ type SessionConfig struct {
 	Issue     *Issue // full JIRA issue (if created from a JIRA issue); used to generate initial agent prompt
 	Branch    string
 	Repo      Repo
+	// Workspace lists the repositories of a multi-repo session, in order;
+	// when set, Repo is empty and CreateSession makes one worktree per entry
+	// under a workspace directory.
+	Workspace []RepoSpec
 	Directory string
 	Agent     *Agent
 	// Tier is the model tier Agent was picked from; empty for an explicit

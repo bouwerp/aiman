@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,5 +179,36 @@ func TestSessionCreateRefusesInvalidBranchFlag(t *testing.T) {
 	params, err := sessionCreateParams(map[string]string{"branch": "feat/x-1"})
 	if err != nil || params["branch"] != "feat/x-1" {
 		t.Fatalf("params %v, err %v", params, err)
+	}
+}
+
+func TestApplyRepoFlags(t *testing.T) {
+	params := map[string]any{"repo": "o/b"}
+	if err := applyRepoFlags(params, []string{"o/a", "o/b:dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := params["repo"]; ok {
+		t.Fatalf("repo kept: %+v", params)
+	}
+	b, _ := json.Marshal(params["repos"])
+	if string(b) != `[{"repo":"o/a"},{"repo":"o/b","base":"dev"}]` {
+		t.Fatalf("repos = %s", b)
+	}
+
+	one := map[string]any{"repo": "o/a:main"}
+	if err := applyRepoFlags(one, []string{"o/a:main"}); err != nil {
+		t.Fatal(err)
+	}
+	if one["repo"] != "o/a" || one["base"] != "main" {
+		t.Fatalf("single = %+v", one)
+	}
+	if err := applyRepoFlags(map[string]any{"base": "x"}, []string{"o/a", "o/b"}); err == nil {
+		t.Fatal("base with several repos accepted")
+	}
+	if err := applyRepoFlags(map[string]any{"base": "x"}, []string{"o/a:y"}); err == nil {
+		t.Fatal("conflicting base accepted")
+	}
+	if got := repeatedFlag([]string{"--repo", "o/a", "--name", "n", "--repo", "o/b"}, "repo"); len(got) != 2 || got[1] != "o/b" {
+		t.Fatalf("repeatedFlag = %v", got)
 	}
 }
