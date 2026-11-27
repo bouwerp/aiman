@@ -58,7 +58,10 @@ type CommandResult struct {
 
 // Record is the result of one gate run for one session and commit.
 type Record struct {
-	Session    string          `json:"session"`
+	Session string `json:"session"`
+	// Repo is the member's owner/name slug for a run of a workspace session;
+	// empty for a single-repo session.
+	Repo       string          `json:"repo,omitempty"`
 	SHA        string          `json:"sha"`
 	Status     Status          `json:"status"`
 	Failed     string          `json:"failed,omitempty"`
@@ -77,13 +80,32 @@ type Options struct {
 	Override *List
 	// Nice is the nice increment for the commands; 0 runs them unchanged.
 	Nice int
+	// Repo names the member of a workspace session the run is for. Runs,
+	// claims, records and units are keyed by session and Repo; empty keeps
+	// the single-repo layout Dir/<session>/.
+	Repo string
+}
+
+// RepoKey is the directory and unit name of a member repository:
+// owner__name in lower case.
+func RepoKey(repo string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(repo), "/", "__"))
+}
+
+// runKey names one claim: the session, plus the member for a workspace run.
+func runKey(session, repo string) string {
+	if repo == "" {
+		return session
+	}
+	return session + "/" + RepoKey(repo)
 }
 
 // Launcher puts one command in the transient scope unit. The runner calls it
 // last, after Dir, Env and stdio are set; it rewrites Path and Args only.
 type Launcher func(unit string, cmd *exec.Cmd)
 
-// Runner runs gate lists and keeps their records under Dir/<session>/. Runs
+// Runner runs gate lists and keeps their records under Dir/<session>/, or
+// Dir/<session>/<repo key>/ for a member of a workspace session. Runs
 // wait in one FIFO queue, in the order of Prepare calls.
 type Runner struct {
 	Dir string
@@ -141,6 +163,7 @@ func (r *Runner) RunWith(ctx context.Context, session, worktree string, opt Opti
 type Pending struct {
 	r        *Runner
 	session  string
+	repo     string
 	worktree string
 	sha      string
 	list     List
@@ -173,7 +196,10 @@ func (r *Runner) Prepare(ctx context.Context, session, worktree string, opt Opti
 	if err := checkName("session", session); err != nil {
 		return nil, err
 	}
-	p := &Pending{r: r, session: session, worktree: worktree, opt: opt,
+	if err := checkRepo(opt.Repo); err != nil {
+		return nil, err
+	}
+	p := &Pending{r: r, session: session, repo: opt.Repo, worktree: worktree, opt: opt,
 		started: make(chan struct{}), dropped: make(chan struct{}), done: make(chan struct{})}
 	if !r.claim(p) {
 		return nil, ErrRunning
@@ -209,7 +235,7 @@ func (r *Runner) prepare(ctx context.Context, p *Pending) error {
 	if !ok {
 		return ErrNoList
 	}
-	rec := Record{Session: p.session, SHA: sha, Status: StatusQueued, Commands: []CommandResult{}, StartedAt: time.Now().UTC()}
+	rec := Record{Session: p.session, Repo: p.repo, SHA: sha, Status: StatusQueued, Commands: []CommandResult{}, StartedAt: time.Now().UTC()}
 	if err := r.write(rec); err != nil {
 		return err
 	}
@@ -245,10 +271,16 @@ func (r *Runner) maxParallel() int {
 // QueuePosition is the session's place in the queue, 1 next; 0 when it has
 // no queued run.
 func (r *Runner) QueuePosition(session string) int {
+	return r.QueuePositionFor(session, "")
+}
+
+// QueuePositionFor is QueuePosition for one member of a workspace session.
+func (r *Runner) QueuePositionFor(session, repo string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	key := runKey(session, repo)
 	for i, p := range r.queue {
-		if p.session == session {
+		if p.key() == key {
 			return i + 1
 		}
 	}
@@ -264,8 +296,22 @@ const dropWait = 30 * time.Second
 // it, and the session's claim and slot are released.
 func (r *Runner) Drop(session string) {
 	r.mu.Lock()
-	p := r.claims[session]
-	if p == nil {
+	var mine []*Pending
+	for _, p := range r.claims {
+		if p.session == session {
+			mine = append(mine, p)
+		}
+	}
+	r.mu.Unlock()
+	for _, p := range mine {
+		r.drop(p)
+	}
+}
+
+// drop ends one claimed run as Drop describes.
+func (r *Runner) drop(p *Pending) {
+	r.mu.Lock()
+	if r.claims[p.key()] != p {
 		r.mu.Unlock()
 		return
 	}
@@ -276,7 +322,7 @@ func (r *Runner) Drop(session string) {
 		p.state = pendingDone
 		p.rec = finish(p.rec, StatusFail, "", "session gone")
 		_ = r.write(p.rec)
-		delete(r.claims, session)
+		delete(r.claims, p.key())
 		close(p.dropped)
 		r.mu.Unlock()
 		r.Kick()
@@ -310,8 +356,8 @@ func (p *Pending) Wait(ctx context.Context) Record {
 			p.state = pendingDone
 			p.rec = finish(p.rec, StatusFail, "", "cancelled while queued: "+ctx.Err().Error())
 			_ = r.write(p.rec)
-			if r.claims[p.session] == p {
-				delete(r.claims, p.session)
+			if r.claims[p.key()] == p {
+				delete(r.claims, p.key())
 			}
 			r.mu.Unlock()
 			r.Kick()
@@ -343,11 +389,11 @@ func (p *Pending) Wait(ctx context.Context) Record {
 	p.state, p.rec = pendingDone, rec
 	_ = r.write(rec)
 	r.active--
-	if r.claims[p.session] == p {
-		delete(r.claims, p.session)
+	if r.claims[p.key()] == p {
+		delete(r.claims, p.key())
 	}
 	r.mu.Unlock()
-	r.prune(p.session, p.sha)
+	r.prune(p.dir(), p.sha)
 	r.Kick()
 	return rec
 }
@@ -380,7 +426,10 @@ func finish(rec Record, st Status, failed, msg string) Record {
 }
 
 func (p *Pending) run(ctx context.Context, rec Record) Record {
-	snap, err := os.MkdirTemp(p.r.sessionDir(p.session), ".snapshot-")
+	if err := os.MkdirAll(p.dir(), 0o700); err != nil {
+		return finish(rec, StatusFail, "", err.Error())
+	}
+	snap, err := os.MkdirTemp(p.dir(), ".snapshot-")
 	if err != nil {
 		return finish(rec, StatusFail, "", err.Error())
 	}
@@ -395,14 +444,18 @@ func (p *Pending) run(ctx context.Context, rec Record) Record {
 	}
 	env := append(os.Environ(), "CI=true", "AIMAN_CI_LOCAL=1")
 	if p.r.TmpDir != "" {
-		tmp, release, err := ClaimTmp(p.r.TmpDir, "ci-"+prefix(p.session, 8)+"-"+prefix(p.sha, 12))
+		name := "ci-" + prefix(p.session, 8) + "-" + prefix(p.sha, 12)
+		if p.repo != "" {
+			name = "ci-" + prefix(p.session, 8) + "-" + RepoKey(p.repo) + "-" + prefix(p.sha, 12)
+		}
+		tmp, release, err := ClaimTmp(p.r.TmpDir, name)
 		if err != nil {
 			return finish(rec, StatusFail, "", "tmpdir: "+err.Error())
 		}
 		defer release()
 		env = append(env, "TMPDIR="+tmp)
 	}
-	unit := CIUnit(p.session, p.sha, p.r.now())
+	unit := CIUnitFor(p.session, p.repo, p.sha, p.r.now())
 	steps := p.list.Commands
 	if p.list.Setup != "" {
 		steps = append([]Command{{Name: "setup", Run: p.list.Setup, Timeout: DefaultTimeout}}, steps...)
@@ -419,7 +472,7 @@ func (p *Pending) run(ctx context.Context, rec Record) Record {
 }
 
 func (p *Pending) runOne(ctx context.Context, snap, unit string, env []string, i int, c Command) CommandResult {
-	logPath := filepath.Join(p.r.sessionDir(p.session), fmt.Sprintf("%s.%d-%s.log", p.sha, i, logSafe(c.Name)))
+	logPath := filepath.Join(p.dir(), fmt.Sprintf("%s.%d-%s.log", p.sha, i, logSafe(c.Name)))
 	res := CommandResult{Name: c.Name, Log: logPath, Exit: -1}
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -566,28 +619,36 @@ func (r *Runner) claim(p *Pending) bool {
 	if r.claims == nil {
 		r.claims = map[string]*Pending{}
 	}
-	if r.claims[p.session] != nil {
+	if r.claims[p.key()] != nil {
 		return false
 	}
-	r.claims[p.session] = p
+	r.claims[p.key()] = p
 	return true
 }
 
 func (r *Runner) release(p *Pending) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.claims[p.session] == p {
-		delete(r.claims, p.session)
+	if r.claims[p.key()] == p {
+		delete(r.claims, p.key())
 	}
 }
 
 // Running reports whether a run for session is queued or running in this
 // runner.
-func (r *Runner) Running(session string) bool {
+func (r *Runner) Running(session string) bool { return r.RunningFor(session, "") }
+
+// RunningFor is Running for one member of a workspace session.
+func (r *Runner) RunningFor(session, repo string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.claims[session] != nil
+	return r.claims[runKey(session, repo)] != nil
 }
+
+func (p *Pending) key() string { return runKey(p.session, p.repo) }
+
+// dir is where the run's record, logs and snapshot live.
+func (p *Pending) dir() string { return p.r.runDir(p.session, p.repo) }
 
 func (r *Runner) now() time.Time {
 	if r.Now != nil {
@@ -598,8 +659,29 @@ func (r *Runner) now() time.Time {
 
 func (r *Runner) sessionDir(session string) string { return filepath.Join(r.Dir, session) }
 
+// runDir is the session's directory, or its member's below it.
+func (r *Runner) runDir(session, repo string) string {
+	if repo == "" {
+		return r.sessionDir(session)
+	}
+	return filepath.Join(r.sessionDir(session), RepoKey(repo))
+}
+
+// checkRepo accepts an empty repo or an owner/name slug whose key is a safe
+// name.
+func checkRepo(repo string) error {
+	if repo == "" {
+		return nil
+	}
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || checkName("repo", owner) != nil || checkName("repo", name) != nil {
+		return fmt.Errorf("invalid repo %q", repo)
+	}
+	return nil
+}
+
 func (r *Runner) write(rec Record) error {
-	dir := r.sessionDir(rec.Session)
+	dir := r.runDir(rec.Session, rec.Repo)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -626,20 +708,28 @@ func (r *Runner) write(rec Record) error {
 // Record reads the record for session and sha. A queued or running record
 // whose run is not in this runner (serve restarted) reads as failed.
 func (r *Runner) Record(session, sha string) (Record, bool, error) {
+	return r.RecordFor(session, "", sha)
+}
+
+// RecordFor is Record for one member of a workspace session.
+func (r *Runner) RecordFor(session, repo, sha string) (Record, bool, error) {
 	if err := checkName("session", session); err != nil {
+		return Record{}, false, err
+	}
+	if err := checkRepo(repo); err != nil {
 		return Record{}, false, err
 	}
 	if err := checkName("sha", sha); err != nil {
 		return Record{}, false, err
 	}
-	rec, err := readRecord(filepath.Join(r.sessionDir(session), sha+".json"))
+	rec, err := readRecord(filepath.Join(r.runDir(session, repo), sha+".json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, false, nil
 	}
 	if err != nil {
 		return Record{}, false, err
 	}
-	if !rec.Status.Finished() && !r.Running(session) {
+	if !rec.Status.Finished() && !r.RunningFor(session, repo) {
 		rec.Status = StatusFail
 		rec.Error = "the run was interrupted (serve restarted); run aiman ci local again"
 	}
@@ -660,8 +750,7 @@ func readRecord(path string) (Record, error) {
 
 // prune keeps the newest keepRecords records plus head's and removes the rest
 // with their logs.
-func (r *Runner) prune(session, head string) {
-	dir := r.sessionDir(session)
+func (r *Runner) prune(dir, head string) {
 	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	type entry struct {
 		sha string

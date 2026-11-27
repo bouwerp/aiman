@@ -97,12 +97,18 @@ func (s *Server) handleSessionLand(ctx context.Context, req Request) Response {
 	if resp, refused := s.refuseOutOfScope(ctx, req, child.ID); refused {
 		return resp
 	}
+	if child.IsWorkspace() {
+		return errResp(req.ID, CodeInvalidParams, "aiman land does not support a multi-repo session yet: push each repository and open its PR")
+	}
 	if child.ParentID == "" || child.Role.Hidden() || child.FixPR != "" {
 		return errResp(req.ID, CodeInvalidParams, "aiman land runs only from a child session")
 	}
 	parent, ok := s.findSession(ctx, child.ParentID)
 	if !ok {
 		return errResp(req.ID, CodeInvalidParams, "the child's coordinator is gone")
+	}
+	if parent.IsWorkspace() {
+		return errResp(req.ID, CodeInvalidParams, "aiman land does not support landing on a multi-repo session yet")
 	}
 	spec, code, err := s.landSpec(ctx, child, parent)
 	if err != nil {
