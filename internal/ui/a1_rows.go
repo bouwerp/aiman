@@ -58,8 +58,13 @@ func renderA1Row(it item, selected bool, width int) string {
 	glyph, gCol := rowGlyph(it)
 	indent := rowIndent(it.treeDepth)
 	ticket := fitTicket(it.session.IssueKey)
+	badge := strings.TrimSpace(it.childBadge())
 	nameShown, gap := rowNameFit(rowName(it), width, indent, it)
 	suffix := rowSuffix(it, width, selected, gCol)
+	badgeText := ""
+	if badge != "" && nameShown != "" {
+		badgeText = a1Pad(1, selected) + a1Text(badge, a1Child, true, selected)
+	}
 
 	line := a1Text(indent, a1Dim, false, selected) +
 		a1Text(glyph, gCol, false, selected) +
@@ -67,6 +72,7 @@ func renderA1Row(it item, selected bool, width int) string {
 		a1Text(ticket, a1BoldText, selected, selected) +
 		a1Pad(2, selected) +
 		a1Text(nameShown, a1BoldText, false, selected) +
+		badgeText +
 		a1Pad(gap, selected) +
 		suffix
 	if lipgloss.Width(line) > width {
@@ -94,18 +100,24 @@ func rowName(it item) string {
 	if name == "" {
 		name = terminalOrID(it.session)
 	}
-	// An expanded parent already shows its children, so the badge is only
-	// useful while they are hidden.
-	if it.collapsed {
-		name += it.childBadge()
-	}
 	return name
+}
+
+// rowBadgeWidth is the room the child badge takes after the name: a space,
+// the glyph and the count. renderA1Row draws it bold in a1Child, apart from
+// the name, so truncation never cuts it.
+func rowBadgeWidth(it item) int {
+	b := strings.TrimSpace(it.childBadge())
+	if b == "" {
+		return 0
+	}
+	return 1 + lipgloss.Width(b)
 }
 
 func rowNameFit(name string, width int, indent string, it item) (shown string, gap int) {
 	suffixW := rowSuffixWidth(it, width)
 	prefixW := lipgloss.Width(indent) + 1 + 1 + 9 + 2
-	remain := width - prefixW - suffixW
+	remain := width - prefixW - suffixW - rowBadgeWidth(it)
 	if remain <= 0 {
 		return "", 0
 	}

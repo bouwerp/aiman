@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bouwerp/aiman/internal/domain"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestChildBadgeMarksParentsAndCounts(t *testing.T) {
@@ -53,5 +54,28 @@ func TestCountDescendantsSurvivesACycle(t *testing.T) {
 	}
 	if got := countDescendants("a", children); got != 1 {
 		t.Errorf("got %d, want 1", got)
+	}
+}
+
+// The A1 row draws the badge on every parent, expanded or not, after the name,
+// and keeps it when a long name is cut to fit.
+func TestA1RowShowsChildBadge(t *testing.T) {
+	parent := item{session: domain.Session{Name: "coordinator-with-a-very-long-name-indeed"}, childN: 3, hasChildren: true}
+	for _, collapsed := range []bool{false, true} {
+		parent.collapsed = collapsed
+		want := "▾3"
+		if collapsed {
+			want = "▸3"
+		}
+		for _, w := range []int{120, 40} {
+			got := ansi.Strip(renderA1Row(parent, false, w))
+			if !strings.Contains(got, want) {
+				t.Errorf("collapsed=%v width=%d: want %q in %q", collapsed, w, want, got)
+			}
+		}
+	}
+	leaf := item{session: domain.Session{Name: "solo"}}
+	if got := ansi.Strip(renderA1Row(leaf, false, 80)); strings.ContainsAny(got, "▾▸") {
+		t.Errorf("leaf row must carry no badge, got %q", got)
 	}
 }
