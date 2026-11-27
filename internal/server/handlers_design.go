@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/artifact"
 	"github.com/bouwerp/aiman/internal/design"
 	"github.com/bouwerp/aiman/internal/domain"
 )
@@ -66,12 +67,21 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 			key = reviewBriefKey(sess.ReviewPR)
 		}
 	}
-	res, err := s.designer.PublishBytes(ctx, md, gitDirOf(wd), repoBase(sess.RepoName), key)
-	if errors.Is(err, design.ErrInvalid) {
-		return errResp(req.ID, CodeInvalidParams, err.Error())
-	}
-	if err != nil {
-		return errResp(req.ID, CodePublishFailed, err.Error())
+	var res design.Result
+	if !s.designer.HasRepo() && s.artifacts != nil {
+		var resp *Response
+		res, resp = s.publishDesignArtifact(ctx, req.ID, sess, md, repoBase(sess.RepoName), key)
+		if resp != nil {
+			return *resp
+		}
+	} else {
+		res, err = s.designer.PublishBytes(ctx, md, gitDirOf(wd), repoBase(sess.RepoName), key)
+		if errors.Is(err, design.ErrInvalid) {
+			return errResp(req.ID, CodeInvalidParams, err.Error())
+		}
+		if err != nil {
+			return errResp(req.ID, CodePublishFailed, err.Error())
+		}
 	}
 	if sess.ReviewPR != "" {
 		if err := s.addReviewGate(sess.ID); err != nil {
@@ -84,6 +94,42 @@ func (s *Server) handleDesignPublish(ctx context.Context, req Request) Response 
 		"accepted": accepted, "rejected": rejected, "deferred": deferred,
 	})
 	return Response{ID: req.ID, Result: map[string]any{"type": "design", "design": res}}
+}
+
+// publishDesignArtifact publishes a design page as an artifact when no docs
+// repository is configured. A later revision of the same key goes to the
+// artifact an earlier one made, when the session may write it, so the link
+// stays the same.
+func (s *Server) publishDesignArtifact(ctx context.Context, id string, sess domain.Session, md []byte, repoName, key string) (design.Result, *Response) {
+	if err := design.CheckNames(repoName, key); err != nil {
+		r := errResp(id, CodeInvalidParams, err.Error())
+		return design.Result{}, &r
+	}
+	title := design.ArtifactTitle(repoName, key)
+	prev := ""
+	recs, err := s.artifacts.Store.List(ctx)
+	if err != nil {
+		r := errResp(id, CodePublishFailed, err.Error())
+		return design.Result{}, &r
+	}
+	for _, rec := range recs {
+		if rec.Title == title && s.ArtifactCanWrite(rec.Session, sess.ID) {
+			prev = rec.ID
+			break
+		}
+	}
+	pub, err := s.artifacts.Publish(ctx, artifact.PublishRequest{
+		ID: prev, Title: title, Session: sess.ID,
+		Files: []artifact.File{{Path: "index.html", Data: design.ArtifactPage(md, title)}},
+	})
+	if err != nil {
+		r := artifactErr(id, err)
+		return design.Result{}, &r
+	}
+	s.appendEvent(ctx, sess.ID, domain.EventActorAiman, domain.EventArtifactPublished, map[string]any{
+		"id": pub.ID, "version": pub.Version, "files": 1 + len(s.artifacts.Kit), "bytes": len(md),
+	})
+	return design.Result{Path: repoName + "/" + key + ".md", URL: pub.URL, Revision: pub.Version, Artifact: pub.ID}, nil
 }
 
 func sessionDir(s domain.Session) string {

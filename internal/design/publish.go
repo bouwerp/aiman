@@ -36,6 +36,9 @@ type Result struct {
 	// Local reports that no docs repository is configured and the page was
 	// only copied under the session's git directory.
 	Local bool `json:"local,omitempty"`
+	// Artifact is the artifact id when serve published the page as an
+	// artifact; Revision is then the artifact version.
+	Artifact string `json:"artifact,omitempty"`
 }
 
 // ErrInvalid marks a publish refused for its input (a bad key or repository
@@ -74,18 +77,29 @@ func (p *Publisher) PublishBytes(ctx context.Context, body []byte, localDir, rep
 	return p.publish(ctx, body, localDir, repoName, key)
 }
 
+// HasRepo reports whether a docs repository is configured.
+func (p *Publisher) HasRepo() bool { return strings.TrimSpace(p.Cfg.Repo) != "" }
+
+// CheckNames refuses a key or repository name that is not one path element.
+func CheckNames(repoName, key string) error {
+	if !safeName(key) {
+		return fmt.Errorf("%w: key %q", ErrInvalid, key)
+	}
+	if !safeName(repoName) {
+		return fmt.Errorf("%w: repo name %q", ErrInvalid, repoName)
+	}
+	return nil
+}
+
 func safeName(s string) bool {
 	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
 }
 
 func (p *Publisher) publish(ctx context.Context, body []byte, localDir, repoName, key string) (Result, error) {
-	if !safeName(key) {
-		return Result{}, fmt.Errorf("%w: key %q", ErrInvalid, key)
+	if err := CheckNames(repoName, key); err != nil {
+		return Result{}, err
 	}
-	if !safeName(repoName) {
-		return Result{}, fmt.Errorf("%w: repo name %q", ErrInvalid, repoName)
-	}
-	if strings.TrimSpace(p.Cfg.Repo) == "" {
+	if !p.HasRepo() {
 		return p.publishLocal(localDir, key, body)
 	}
 	if err := p.checkPrivate(ctx); err != nil {
