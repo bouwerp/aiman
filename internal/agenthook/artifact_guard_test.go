@@ -67,6 +67,24 @@ func TestArtifactGuardScript(t *testing.T) {
 	if code, _ := run(`{"tool_name":"Artifact","tool_input":{"action":"quickstart","intent":"other"}}`, "AIMAN_ENV=1"); code != 2 {
 		t.Fatalf("quickstart in session: %d", code)
 	}
+	for name, in := range map[string]string{
+		"update":        `{"tool_name":"Artifact","tool_input":{"file_path":"x.html","url":"https://claude.ai/artifact/abc"}}`,
+		"update spaced": `{"tool_name": "Artifact", "tool_input": {"url": "https://claude.ai/code/artifact/abc", "edits": []}}`,
+		"capabilities":  `{"tool_name":"Artifact","tool_input":{"file_path":"x.html","capabilities":{"storage":{}}}}`,
+	} {
+		if code, out := run(in, "AIMAN_ENV=1"); code != 0 {
+			t.Fatalf("%s in session: %d %q", name, code, out)
+		}
+	}
+	for name, in := range map[string]string{
+		"other host url":     `{"tool_name":"Artifact","tool_input":{"file_path":"x.html","url":"https://evil.example/claude.ai/"}}`,
+		"empty capabilities": `{"tool_name":"Artifact","tool_input":{"file_path":"x.html","capabilities":{}}}`,
+		"delete":             `{"tool_name":"Artifact","tool_input":{"action":"delete","url":"https://claude.ai/artifact/abc"}}`,
+	} {
+		if code, _ := run(in, "AIMAN_ENV=1"); code != 2 {
+			t.Fatalf("%s in session: %d, want 2", name, code)
+		}
+	}
 	for _, a := range []string{"read", "list", "open"} {
 		if code, out := run(`{"tool_name":"Artifact","tool_input":{"action":"`+a+`","url":"u"}}`, "AIMAN_ENV=1"); code != 0 {
 			t.Fatalf("%s in session: %d %q", a, code, out)

@@ -799,7 +799,7 @@ func (e *Engine) prepareCodex(ctx context.Context, remote domain.RemoteExecutor,
 
 // ArtifactsFirstLine is the task file guardrail that routes every page a
 // session publishes through aiman artifact publish.
-const ArtifactsFirstLine = "- **Web pages.** Publish every report, dashboard, diagram or other page for the operator with `aiman artifact publish` (the aiman skill's Artifacts section). Do not use Claude's Artifact tool, a gist, Pages or any other host. If `aiman artifact publish` fails, stop and tell the operator the command and the error.\n"
+const ArtifactsFirstLine = "- **Web pages.** Publish every report, dashboard, diagram or other page for the operator with `aiman artifact publish` (the aiman skill's Artifacts section). Do not use Claude's Artifact tool, a gist, Pages or any other host, except to update a claude.ai page that needs its page database, Claude calls or storage. If `aiman artifact publish` fails, stop and tell the operator the command and the error.\n"
 
 // SlackFirstLine is the task file guardrail that routes every Slack read and
 // write through aiman slack and rules out the agent's own Slack tools; a

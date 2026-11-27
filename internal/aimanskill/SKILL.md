@@ -508,7 +508,7 @@ aiman slack dm U1[,U2]
 
 Publish a report, dashboard, diagram or explainer for the operator as a private web page. Do not leave it as a loose file on the host.
 
-Use `aiman artifact publish` for every page, in every agent. Do not use Claude's Artifact tool (in Claude, aiman's hook refuses it in a session; reading, listing and opening existing claude.ai artifacts stay allowed), a gist, GitHub Pages or any other host. If `aiman artifact publish` fails, stop and tell the operator the command you ran and its error.
+Use `aiman artifact publish` for every page, in every agent. Do not use Claude's Artifact tool (in Claude, aiman's hook refuses it in a session), a gist, GitHub Pages or any other host. The one exception is a page that needs claude.ai features aiman pages lack (a page database, asking Claude, browser storage, loading its own files): Claude's Artifact tool may update such an existing claude.ai artifact (pass its `url`) or publish a page that declares `capabilities`. Reading, listing and opening claude.ai artifacts stay allowed; deleting one is refused. If `aiman artifact publish` fails, stop and tell the operator the command you ran and its error.
 
 ```bash
 aiman artifact publish report/index.html --title "Load test" [--file chart.svg] [--file data/x.json=out/x.json] [--theme plex|grotesk|signal]
