@@ -35,6 +35,9 @@ type SummaryModel struct {
 	// workspace fields
 	workspacePath   string
 	workspaceExists bool
+	// workspaceRepos are a multi-repo session's repositories; the summary
+	// lists them and has no Directory stop.
+	workspaceRepos []domain.RepoSpec
 	// missingTools are the repo's required tools the remote lacks. They are
 	// a warning only; enter still creates.
 	missingTools []string
@@ -69,6 +72,13 @@ func (m *SummaryModel) DisableDirectory() {
 	if m.focusIndex > m.buttonFocusIndex() {
 		m.focusIndex = m.buttonFocusIndex()
 	}
+}
+
+// SetWorkspaceRepos makes this a multi-repo summary: every repository is
+// listed and the working directory is the workspace directory.
+func (m *SummaryModel) SetWorkspaceRepos(repos []domain.RepoSpec) {
+	m.workspaceRepos = append([]domain.RepoSpec(nil), repos...)
+	m.DisableDirectory()
 }
 
 // WantsDirectory reports that enter on the Directory field asked for the
@@ -229,15 +239,31 @@ func (m SummaryModel) viewString() string {
 		}
 
 		// Repository
-		if m.repo.Name != "" {
+		switch {
+		case len(m.workspaceRepos) > 0:
+			for i, r := range m.workspaceRepos {
+				label := ""
+				if i == 0 {
+					label = "Repositories:"
+				}
+				line := r.Repo
+				if r.Base != "" {
+					line += muted.Render(" (from " + r.Base + ")")
+				}
+				b.WriteString(fmt.Sprintf("%-15s %s\n", label, line))
+			}
+		case m.repo.Name != "":
 			b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", m.repo.Name))
-		} else {
+		default:
 			b.WriteString(fmt.Sprintf("%-15s %s\n", "Repository:", failStyle.Render("None")))
 		}
 
 		// Directory: a focusable field when the user may choose one.
 		dir := m.directory
-		if m.dirField {
+		switch {
+		case len(m.workspaceRepos) > 0:
+			b.WriteString(fmt.Sprintf("%-15s %s\n", "Directory:", muted.Render("workspace, one directory per repository")))
+		case m.dirField:
 			if dir == "" || dir == "." {
 				root := "repo root"
 				if m.repo.Name == "" || m.repo.Name == "No Repository" {
@@ -251,7 +277,7 @@ func (m SummaryModel) viewString() string {
 			}
 			dir += muted.Render("  (tab here, enter to change)")
 			b.WriteString(label + " " + dir + "\n")
-		} else {
+		default:
 			if dir == "" {
 				dir = "."
 			}

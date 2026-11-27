@@ -196,6 +196,8 @@ Sessions merge by ID. Discovery keeps every live PTY session with an ID of its o
 
 A legacy tmux row is never discovered. It stays listed as inactive, in memory only, until the user stops it and restarts it into pty.
 
+The TUI maps `SessionInfo.repos` onto `Members` (`membersFromInfo`), keeps stored members over a scan's none and writes them to the laptop database (`saveMembers`). A workspace session's meta line has one item per member, `<dir> ↑<ahead of base>[ ✎]` (`workspaceMemberParts`), from one `gitStatusMsg` whose `members` `fetchGitStatus` reads per member worktree; list rows say `Repo: a, b`. A workspace placeholder matches only a workspace session on the same host and branch with the same repos in order, and a plain placeholder never matches a workspace session by branch.
+
 `applyDiscoveryResult` overlays those DB fields onto live sessions (`overlayPersistedSessionFields`) so a scan cannot flatten names and groups in the TUI. Save still uses COALESCE so empty discovery writes do not wipe the DB. Serve's non-empty name and group win over the laptop's in `session_created`, so the TUI's group assign, group rename and session rename save the laptop DB and also call `session.move` / `session.rename` on that session's serve (`syncIdentityToServe`, `internal/ui/session_identity_sync.go`); a failure toasts, an old serve or a `not_found` is silent.
 
 Pins (`session.pin {session|id, pinned}`, CLI `aiman session pin|unpin <target>`, `internal/server/handlers_pin.go`) live on serve's row: operator only (`needs_operator` for a session caller), answering `{"type":"session","session":…}`, a plain gateway device method like `session.move`. `SessionInfo.pinned` is always set by serve (absent from an older serve), and `session_created` is announced again when a row's group or pin changes. The TUI's `*` on the sessions tab (`internal/ui/session_pin.go`) flips the pin in memory and the laptop DB (`SetPinned`) and calls `session.pin` through `syncIdentityToServe`; a `session_created` carrying `pinned` sets the laptop's pin (`applyServePin`), a scan keeps the stored one. A pinned session lists with its descendants under a bold gold `★ pinned` header at the top (`groupedSessionItems`, collapse key `pinnedBucketKey`, never a group's), and not in its group.
@@ -459,7 +461,7 @@ The TUI wizard (`n` key) drives the user through:
    to the current user in `integrations.jira.issue_statuses` (default:
    `jira.DefaultIssueStatuses`) are listed, and typed searches are scoped the same way.
 4. Branch name editor
-5. Repo picker (via `gh repo list`)
+5. Repo picker (via `gh repo list`). `space` marks repos (`[x]`, `<n> marked`, at most 8); `enter` with 2+ marks finishes a multi-repo pick (`RepoPickerModel.Workspace()`, mark order), with 0 or 1 mark it is a single pick (one mark selects that repo). Marking is off (`Single`) for existing-branch, review, autonomous and quick creates. A multi pick sets `sessionCfg.Workspace` (empty bases) with empty `Repo` and `Directory` and goes to the agent picker; the summary lists every slug with no Directory stop; `remoteCreateSpecFrom` sends them as `repos`, and the create goes only to serve (`mustCreateRemotely`). A WORKTREE_EXISTS answer moves a workspace to a free `-<n>` branch, checking each member (`branchInUse`).
 6. Agent picker (scans the remote for installed agents). It lists only those agents; there
    are no tier rows. Each row shows the agent's default model (from `agent_defaults`, else
    the first catalog model, else `host default` for Pi). Enter on an agent that has more

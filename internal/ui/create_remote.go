@@ -37,6 +37,11 @@ func remoteCreateSpecFrom(cfg domain.SessionConfig) usecase.RemoteCreateSpec {
 		spec.BaseBranch = cfg.BaseBranch
 		spec.Quick = cfg.Quick
 		spec.ExistingBranch = cfg.ExistingBranch
+		if len(cfg.Workspace) > 0 {
+			spec.Repos = append([]domain.RepoSpec(nil), cfg.Workspace...)
+			spec.Repo = ""
+			spec.Dir = ""
+		}
 	} else {
 		spec.PromptFree = true
 	}
@@ -63,9 +68,19 @@ var errPreferredNeedsServe = errors.New("no agent chosen: only the remote agent 
 // state.
 // mustCreateRemotely reports a create that has no laptop fallback. A
 // review's PR worktree, scratch directory and to-dos live in serve; the
-// local FlowManager has no branch and would name an empty worktree.
+// local FlowManager has no branch and would name an empty worktree. A
+// workspace's members are stored only by serve's create (session.register
+// never writes them), so it has no laptop fallback either.
 func mustCreateRemotely(cfg domain.SessionConfig) bool {
-	return strings.TrimSpace(cfg.ReviewPR) != ""
+	return strings.TrimSpace(cfg.ReviewPR) != "" || len(cfg.Workspace) > 0
+}
+
+// remoteOnlyKind names a create mustCreateRemotely holds to serve.
+func remoteOnlyKind(cfg domain.SessionConfig) string {
+	if len(cfg.Workspace) > 0 {
+		return "a multi-repo session"
+	}
+	return "review"
 }
 
 func canCreateRemotely(cfg domain.SessionConfig) (bool, string) {
@@ -117,16 +132,24 @@ func createSessionRemotely(ctx context.Context, mgr *ssh.Manager, cfg domain.Ses
 func (m *Model) createReviewRemotely(ctx context.Context, sessionCfg domain.SessionConfig, placeholderID string, sendStatus func(string)) sessionCreateMsg {
 	mgr, ok := sessionCfg.SSHManager.(*ssh.Manager)
 	if !ok {
-		return sessionCreateMsg{err: errors.New("review needs a remote host"), placeholderID: placeholderID}
+		return sessionCreateMsg{err: fmt.Errorf("%s needs a remote host", remoteOnlyKind(sessionCfg)), placeholderID: placeholderID}
 	}
 	if !usecase.ServeAvailable(ctx, mgr) {
-		return sessionCreateMsg{err: fmt.Errorf("review needs the agent API on %s", sessionCfg.RemoteHost), placeholderID: placeholderID}
+		return sessionCreateMsg{err: fmt.Errorf("%s needs the agent API on %s", remoteOnlyKind(sessionCfg), sessionCfg.RemoteHost), placeholderID: placeholderID}
 	}
 	sendStatus("Handing creation to the remote...")
 	session, err := createSessionRemotely(ctx, mgr, sessionCfg, sessionCfg.RemoteHost)
 	if err != nil {
-		m.logPersistent("remote review create failed for %q: %v", sessionCfg.ReviewPR, err)
+		m.logPersistent("remote %s create failed for %q: %v", remoteOnlyKind(sessionCfg), sessionCfg.ReviewPR+sessionCfg.Branch, err)
 		return sessionCreateMsg{err: err, placeholderID: placeholderID}
+	}
+	if len(session.Members) == 0 && len(sessionCfg.Workspace) > 0 {
+		// The create result names no members; serve's session_created
+		// announcement fills in their paths.
+		session.Members = placeholderMembers(sessionCfg.Workspace)
+		for i := range session.Members {
+			session.Members[i].Branch = session.Branch
+		}
 	}
 	m.logPersistent("remote created session %s (%s) on %s; sync and credentials reconcile locally",
 		session.TerminalName, session.ID, sessionCfg.RemoteHost)

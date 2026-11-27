@@ -297,39 +297,43 @@ func (i item) Description() string {
 	if i.session.IsLegacyTmux() {
 		agentPart = legacyTmuxBadge + agentPart
 	}
+	repo := i.session.RepoName
+	if i.session.IsWorkspace() {
+		repo = workspaceRepoLabel(i.session)
+	}
 	createdPart := ""
 	if !i.session.CreatedAt.IsZero() {
 		createdPart = " | Created: " + i.session.CreatedAt.Format("2006-01-02 15:04")
 	}
 	if i.activity == "creating" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creating in background…%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creating in background…%s", repo, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "create-failed" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creation failed%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: creation failed%s", repo, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "terminating" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: terminating in background…%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: terminating in background…%s", repo, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.needsInput {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: input%s", repo, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "stale" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: thinking (no progress >5m — may be stuck)%s", repo, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.activity == "exited" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: agent exited — press s to resume%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: agent exited — press s to resume%s", repo, i.session.RemoteHost, agentPart, createdPart)
 	}
 	if i.session.Mode == domain.SessionModeAutonomous && i.session.Status == domain.SessionStatusInactive {
-		return fmt.Sprintf("Trigger Rule: %s | Repo: %s | Host: %s | Poll: %ds%s", i.session.TriggerSource, i.session.RepoName, i.session.RemoteHost, i.session.AutonomousConfig.PollFrequencySecs, createdPart)
+		return fmt.Sprintf("Trigger Rule: %s | Repo: %s | Host: %s | Poll: %ds%s", i.session.TriggerSource, repo, i.session.RemoteHost, i.session.AutonomousConfig.PollFrequencySecs, createdPart)
 	}
 	if i.activity != "" {
-		return fmt.Sprintf("Repo: %s | Host: %s%s | State: %s%s", i.session.RepoName, i.session.RemoteHost, agentPart, i.activity, createdPart)
+		return fmt.Sprintf("Repo: %s | Host: %s%s | State: %s%s", repo, i.session.RemoteHost, agentPart, i.activity, createdPart)
 	}
-	return fmt.Sprintf("Repo: %s | Host: %s%s%s", i.session.RepoName, i.session.RemoteHost, agentPart, createdPart)
+	return fmt.Sprintf("Repo: %s | Host: %s%s%s", repo, i.session.RemoteHost, agentPart, createdPart)
 }
 
 func (i item) FilterValue() string {
-	return i.session.Name + " " + i.session.Group + " " + i.session.IssueKey + " " + i.session.TerminalName + " " + i.session.RepoName + " " + i.remoteName
+	return i.session.Name + " " + i.session.Group + " " + i.session.IssueKey + " " + i.session.TerminalName + " " + i.session.RepoName + " " + workspaceRepoLabel(i.session) + " " + i.remoteName
 }
 
 type tunnelItem struct {
@@ -1099,6 +1103,9 @@ type gitStatusMsg struct {
 	session string
 	status  domain.GitStatus
 	err     error
+	// members is a workspace session's status per member, keyed by member
+	// WorktreePath; status is then unset.
+	members map[string]domain.GitStatus
 }
 
 type gitTickMsg time.Time
@@ -1335,10 +1342,74 @@ func (m *Model) fetchGitStatus(s domain.Session, class fetchClass) tea.Cmd {
 			}
 			release = rel
 		}
+		if s.IsWorkspace() {
+			members, err := fetchMemberGitStatus(ctx, cfg, s)
+			release(callTimedOut(err))
+			return gitStatusMsg{session: key, members: members, err: err}
+		}
 		status, err := gitStatusFetch(ctx, cfg, s)
 		release(callTimedOut(err))
 		return gitStatusMsg{session: key, status: status, err: err}
 	}
+}
+
+// applyMemberGitStatus keeps a workspace session's member statuses for its
+// meta line.
+func (m *Model) applyMemberGitStatus(id string, members map[string]domain.GitStatus) {
+	if m.metaExtras == nil {
+		m.metaExtras = map[string]detailMetaExtras{}
+	}
+	extras := m.metaExtras[id]
+	extras.Members = members
+	m.metaExtras[id] = extras
+}
+
+// fetchMemberGitStatus reads each member worktree of a workspace session in
+// parallel, never the workspace directory itself. A member that fails is left
+// out; the error is the first failure, returned only when every member failed.
+func fetchMemberGitStatus(ctx context.Context, cfg *config.Config, s domain.Session) (map[string]domain.GitStatus, error) {
+	type result struct {
+		path   string
+		status domain.GitStatus
+		err    error
+	}
+	var members []domain.SessionRepo
+	for _, mem := range s.Members {
+		if mem.WorktreePath != "" {
+			members = append(members, mem)
+		}
+	}
+	if len(members) == 0 {
+		return nil, fmt.Errorf("no member worktree paths")
+	}
+	results := make(chan result, len(members))
+	for _, mem := range members {
+		one := s
+		one.WorktreePath = mem.WorktreePath
+		one.WorkingDirectory = mem.WorktreePath
+		one.BaseBranch = mem.BaseBranch
+		one.Members = nil
+		go func() {
+			st, err := gitStatusFetch(ctx, cfg, one)
+			results <- result{path: one.WorktreePath, status: st, err: err}
+		}()
+	}
+	out := make(map[string]domain.GitStatus, len(members))
+	var firstErr error
+	for range members {
+		r := <-results
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", r.path, r.err)
+			}
+			continue
+		}
+		out[r.path] = r.status
+	}
+	if len(out) == 0 {
+		return nil, firstErr
+	}
+	return out, nil
 }
 
 // summariseSessionCmd captures the current pane and sends it to the local SLM
@@ -2281,16 +2352,9 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 	if msg.err != nil {
 		if strings.Contains(msg.err.Error(), "WORKTREE_EXISTS") {
 			// Auto-resolve WORKTREE_EXISTS based on active sessions
-			isUsed := false
-			for _, s := range m.allSessions {
-				if s.ID == msg.placeholderID {
-					continue
-				}
-				if s.RepoName == cs.cfg.Repo.Name && s.Branch == cs.cfg.Branch && s.RemoteHost == cs.remote.Host && s.Status != domain.SessionStatusCleanup && s.Status != domain.SessionStatusError {
-					isUsed = true
-					break
-				}
-			}
+			// A workspace create cannot attach to an existing worktree, so
+			// it always moves to a free suffix.
+			isUsed := len(cs.cfg.Workspace) > 0 || m.branchInUse(cs, cs.cfg.Branch, msg.placeholderID)
 
 			if !isUsed {
 				// No session is actively using it. Automatically recycle it.
@@ -2302,17 +2366,7 @@ func (m *Model) handleBackgroundCreateMsg(msg sessionCreateMsg) (tea.Model, tea.
 				suffix := 1
 				for {
 					newBranch := fmt.Sprintf("%s-%d", cs.cfg.Branch, suffix)
-					used := false
-					for _, s := range m.allSessions {
-						if s.ID == msg.placeholderID {
-							continue
-						}
-						if s.RepoName == cs.cfg.Repo.Name && s.Branch == newBranch && s.RemoteHost == cs.remote.Host && s.Status != domain.SessionStatusCleanup && s.Status != domain.SessionStatusError {
-							used = true
-							break
-						}
-					}
-					if !used {
+					if !m.branchInUse(cs, newBranch, msg.placeholderID) {
 						m.sessionCfg.BaseBranch = cs.cfg.Branch
 						cs.cfg.BaseBranch = cs.cfg.Branch
 						m.sessionCfg.Branch = newBranch
@@ -4356,6 +4410,9 @@ func (m *Model) handleMainUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitStatusMsg:
 		delete(m.gitInFlight, msg.session)
 		cmds = append(cmds, m.drainPending())
+		if msg.members != nil {
+			m.applyMemberGitStatus(msg.session, msg.members)
+		}
 		if msg.session == m.activeSession {
 			if msg.err == nil {
 				m.gitStatus = msg.status
@@ -6615,20 +6672,26 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.picker = NewRepoPickerModel(msg.repos, &m.cfg.Git)
+		m.picker.Single = m.singleRepoPick()
 		h, v := docStyle.GetFrameSize()
 		m.picker.list.SetSize(m.width-h, m.height-v)
 		return m, nil
 	}
+	m.picker.Single = m.picker.Single || m.singleRepoPick()
 	var subModel tea.Model
 	var cmd tea.Cmd
 	subModel, cmd = m.picker.Update(msg)
 	m.picker = subModel.(RepoPickerModel)
+	if ws := m.picker.Workspace(); len(ws) > 0 {
+		return m.startWorkspacePick(ws)
+	}
 	if m.picker.Skip {
 		if m.reviewMode {
 			m.picker.Skip = false
 			return m, cmd
 		}
 		m.sessionCfg.Repo = domain.Repo{Name: "No Repository", URL: ""}
+		m.sessionCfg.Workspace = nil
 		m.sessionCfg.Directory = ""
 		m.loadingMsg = "Scanning available agents..."
 		m.loadingNext = viewStateAgentPicker
@@ -6638,6 +6701,7 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.picker.selected != nil {
 		// Repo selected, now fetch directories (or branches for existing branch mode)
 		m.sessionCfg.Repo = *m.picker.selected
+		m.sessionCfg.Workspace = nil
 
 		if m.reviewMode {
 			m.loadingMsg = "Loading pull requests..."
@@ -6680,6 +6744,64 @@ func (m *Model) handleRepoPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchAgents()
 	}
 	return m, cmd
+}
+
+// branchInUse reports a live session on the create's host working on branch
+// in any repository the create names: its repo, or each workspace member.
+// A workspace session counts through each of its members.
+func (m *Model) branchInUse(cs *creatingSession, branch, placeholderID string) bool {
+	repos := []string{cs.cfg.Repo.Name}
+	if len(cs.cfg.Workspace) > 0 {
+		repos = repos[:0]
+		for _, r := range cs.cfg.Workspace {
+			repos = append(repos, r.Repo)
+		}
+	}
+	for _, s := range m.allSessions {
+		if s.ID == placeholderID || s.Branch != branch || s.RemoteHost != cs.remote.Host ||
+			s.Status == domain.SessionStatusCleanup || s.Status == domain.SessionStatusError {
+			continue
+		}
+		held := []string{s.RepoName}
+		if s.IsWorkspace() {
+			held = held[:0]
+			for _, mem := range s.Members {
+				held = append(held, mem.Repo)
+			}
+		}
+		for _, want := range repos {
+			for _, have := range held {
+				if strings.EqualFold(want, have) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// singleRepoPick reports a create that takes one repository: an existing
+// branch, a PR review, an autonomous trigger or a quick session. Only a new
+// branch may span several repositories.
+func (m *Model) singleRepoPick() bool {
+	return m.sessionCfg.ExistingBranch || m.reviewMode || m.sessionCfg.ReviewPR != "" ||
+		m.sessionCfg.Mode == domain.SessionModeAutonomous || m.sessionCfg.Quick
+}
+
+// startWorkspacePick records a multi-repo pick (mark order, default bases)
+// and goes to the agent picker; a workspace has no directory step.
+func (m *Model) startWorkspacePick(repos []domain.Repo) (tea.Model, tea.Cmd) {
+	ws := make([]domain.RepoSpec, len(repos))
+	for i, r := range repos {
+		ws[i] = domain.RepoSpec{Repo: r.Name}
+	}
+	m.sessionCfg.Workspace = ws
+	m.sessionCfg.Repo = domain.Repo{}
+	m.sessionCfg.Directory = ""
+	m.loadingMsg = "Scanning available agents..."
+	m.loadingNext = viewStateAgentPicker
+	m.state = viewStateLoading
+	return m, m.fetchAgents()
 }
 
 // handleDirPickerUpdate drives the new-session directory picker. The summary
@@ -6805,6 +6927,9 @@ func (m *Model) handleAgentPickerUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.summary = NewSummaryModel(m.sessionCfg.IssueKey, m.sessionCfg.Branch, m.sessionCfg.Repo, m.sessionCfg.Directory)
 			if m.sessionCfg.ReviewPR != "" || m.sessionCfg.Mode == domain.SessionModeAutonomous {
 				m.summary.DisableDirectory()
+			}
+			if len(m.sessionCfg.Workspace) > 0 {
+				m.summary.SetWorkspaceRepos(m.sessionCfg.Workspace)
 			}
 		}
 		m.summary.SetAgent(m.sessionCfg.Agent)
@@ -7162,6 +7287,7 @@ func (m *Model) handleLoadingUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.picker = NewRepoPickerModel(msg.repos, &m.cfg.Git)
+		m.picker.Single = m.singleRepoPick()
 		h, v := docStyle.GetFrameSize()
 		m.picker.list.SetSize(m.width-h, m.height-v)
 		m.state = m.loadingNext

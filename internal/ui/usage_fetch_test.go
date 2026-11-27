@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -200,7 +201,7 @@ func TestUsageMsgUpdatesExtras(t *testing.T) {
 
 	updated, _ := m.Update(usageMsg{sessionID: "s", err: errUsageTest})
 	m = updated.(*Model)
-	if m.metaExtras["s"] != prev {
+	if !reflect.DeepEqual(m.metaExtras["s"], prev) {
 		t.Fatalf("error overwrote extras: %+v", m.metaExtras["s"])
 	}
 	if m.usageInFlight["s"] {

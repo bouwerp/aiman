@@ -394,7 +394,21 @@ func sessionFromInfo(host string, info server.SessionInfo) domain.Session {
 		AgentTitle:       info.Title,
 		AgentEnded:       info.Ended,
 		Status:           domain.SessionStatus(info.Status),
+		Members:          membersFromInfo(info.Repos),
 	}
+}
+
+// membersFromInfo is serve's repos list as a workspace session's members,
+// in the order serve sent them.
+func membersFromInfo(repos []server.SessionRepoInfo) []domain.SessionRepo {
+	if len(repos) == 0 {
+		return nil
+	}
+	out := make([]domain.SessionRepo, len(repos))
+	for i, r := range repos {
+		out[i] = domain.SessionRepo{Repo: r.Repo, Branch: r.Branch, BaseBranch: r.BaseBranch, WorktreePath: r.WorktreePath, Ord: i}
+	}
+	return out
 }
 
 func (m *Model) upsertLiveSession(s domain.Session) {
@@ -409,6 +423,7 @@ func (m *Model) upsertLiveSession(s domain.Session) {
 		m.allSessions[i].ID = s.ID
 		if m.db != nil && !domain.IsEphemeralSessionID(s.ID) {
 			_ = m.db.Save(context.Background(), &m.allSessions[i])
+			m.saveMembers(m.allSessions[i])
 		}
 		m.maybeRefreshSessionList()
 		return
@@ -419,8 +434,28 @@ func (m *Model) upsertLiveSession(s domain.Session) {
 	m.allSessions = append(m.allSessions, s)
 	if m.db != nil && !domain.IsEphemeralSessionID(s.ID) {
 		_ = m.db.Save(context.Background(), &s)
+		m.saveMembers(s)
 	}
 	m.maybeRefreshSessionList()
+}
+
+// memberSetter is the laptop database's member writer; Save never writes
+// members.
+type memberSetter interface {
+	SetSessionRepos(ctx context.Context, sessionID string, members []domain.SessionRepo) error
+}
+
+// saveMembers stores a workspace session's members in the laptop database,
+// so a restart lists them before serve announces the session again.
+func (m *Model) saveMembers(s domain.Session) {
+	if !s.IsWorkspace() || m.db == nil {
+		return
+	}
+	if setter, ok := m.db.(memberSetter); ok {
+		if err := setter.SetSessionRepos(context.Background(), s.ID, s.Members); err != nil {
+			m.log("save members of %s: %v", s.ID, err)
+		}
+	}
 }
 
 func (m *Model) maybeRefreshSessionList() {
