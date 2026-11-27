@@ -130,12 +130,15 @@ func TestCIGetWorkspacePlainShapeUnchanged(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatal(resp.Error)
 	}
-	var raw map[string]map[string]any
+	var raw map[string]json.RawMessage
 	b, _ := json.Marshal(resp.Result)
 	if err := json.Unmarshal(b, &raw); err != nil {
 		t.Fatal(err)
 	}
-	ci := raw["ci"]
+	var ci map[string]any
+	if err := json.Unmarshal(raw["ci"], &ci); err != nil {
+		t.Fatal(err)
+	}
 	if _, has := ci["repos"]; has {
 		t.Fatalf("plain session's ci carries repos: %v", ci)
 	}
