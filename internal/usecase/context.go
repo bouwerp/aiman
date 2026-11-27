@@ -82,6 +82,56 @@ func InjectSharedContext(ctx context.Context, remote contextRemote, worktreePath
 	return joinPrompt(ContextPackPrompt, prompt)
 }
 
+// InjectWorkspaceContext is InjectSharedContext for a multi-repo session: it
+// packs the shared context once per member slug and writes one file holding
+// every note once, in the order the packs listed them.
+func InjectWorkspaceContext(ctx context.Context, remote contextRemote, dir, group string, repos []string, prompt string) string {
+	if remote == nil {
+		return prompt
+	}
+	var packs []string
+	for _, r := range repos {
+		packs = append(packs, FetchContextPack(ctx, remote, group, r))
+	}
+	pack := mergeContextPacks(packs)
+	if pack == "" {
+		return prompt
+	}
+	if err := contextstore.WriteSessionPack(ctx, remote, dir, pack); err != nil {
+		return prompt
+	}
+	return joinPrompt(ContextPackPrompt, prompt)
+}
+
+// mergeContextPacks keeps the first pack's header lines and every note line
+// ("- ...") once.
+func mergeContextPacks(packs []string) string {
+	var head, notes []string
+	seen := map[string]bool{}
+	for _, p := range packs {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		first := head == nil
+		for _, line := range strings.Split(strings.TrimSpace(p), "\n") {
+			if strings.HasPrefix(line, "- ") {
+				if !seen[line] {
+					seen[line] = true
+					notes = append(notes, line)
+				}
+				continue
+			}
+			if first {
+				head = append(head, line)
+			}
+		}
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(head, "\n")) + "\n\n" + strings.Join(notes, "\n") + "\n"
+}
+
 func PutSnapshotContext(ctx context.Context, remote contextRemote, snap *domain.SessionSnapshot, group string) error {
 	if remote == nil || snap == nil {
 		return nil

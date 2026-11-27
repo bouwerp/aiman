@@ -177,6 +177,9 @@ func runSession(args []string) error {
 			return callAndPrintRaw(sock, "session.create", raw)
 		}
 		params, perr := sessionCreateParams(flags)
+		if perr == nil {
+			perr = applyRepoFlags(params, repeatedFlag(args[1:], "repo"))
+		}
 		if perr != nil {
 			writeCLIError(server.CodeInvalidParams, perr.Error())
 			return errUsage
@@ -295,6 +298,55 @@ func sessionCreateParams(flags map[string]string) (map[string]any, error) {
 		params["existing_branch"] = true
 	}
 	return params, nil
+}
+
+// repeatedFlag returns every value of --name in args, in order.
+func repeatedFlag(args []string, name string) []string {
+	var out []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--"+name && !strings.HasPrefix(args[i+1], "--") {
+			out = append(out, args[i+1])
+			i++
+		}
+	}
+	return out
+}
+
+// applyRepoFlags maps the --repo values onto session.create params. Each is
+// owner/name or owner/name:base. One sets repo (and base); two or more set
+// repos, a workspace session.
+func applyRepoFlags(params map[string]any, values []string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	delete(params, "repo")
+	type spec struct {
+		Repo string `json:"repo"`
+		Base string `json:"base,omitempty"`
+	}
+	specs := make([]spec, 0, len(values))
+	for _, v := range values {
+		slug, base, _ := strings.Cut(v, ":")
+		if slug == "" {
+			return errors.New("repo is empty: " + v)
+		}
+		specs = append(specs, spec{Repo: slug, Base: base})
+	}
+	if len(specs) == 1 {
+		params["repo"] = specs[0].Repo
+		if specs[0].Base != "" {
+			if b, ok := params["base"]; ok && b != specs[0].Base {
+				return errors.New("--repo " + values[0] + " and --base disagree")
+			}
+			params["base"] = specs[0].Base
+		}
+		return nil
+	}
+	if _, ok := params["base"]; ok {
+		return errors.New("--base applies to one repo; give each repo its base as --repo owner/name:base")
+	}
+	params["repos"] = specs
+	return nil
 }
 
 var boolSessionFlags = map[string]bool{

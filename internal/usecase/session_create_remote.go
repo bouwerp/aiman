@@ -14,9 +14,12 @@ import (
 // RemoteCreateSpec is what the wizard decided, in the form serve's
 // session.create accepts.
 type RemoteCreateSpec struct {
-	Name   string
-	Group  string
-	Repo   string
+	Name  string
+	Group string
+	Repo  string
+	// Repos makes a workspace session over several repositories; when set,
+	// Repo is ignored.
+	Repos  []domain.RepoSpec
 	Branch string
 	Agent  string
 	// Tier is the model tier to launch from when Agent is empty: smart or
@@ -86,6 +89,10 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 				params[key] = val
 			}
 		}
+		if len(spec.Repos) > 0 {
+			delete(params, "repo")
+			params["repos"] = repoSpecParams(spec.Repos)
+		}
 		if spec.Quick {
 			params["quick"] = true
 		}
@@ -121,6 +128,20 @@ func CreateSessionOnRemote(ctx context.Context, remote TerminalExecutor, spec Re
 		sess.ReviewPR = spec.Review
 	}
 	return sess, nil
+}
+
+// repoSpecParams is session.create's repos: [{repo, base}], base omitted
+// when empty.
+func repoSpecParams(specs []domain.RepoSpec) []map[string]string {
+	out := make([]map[string]string, 0, len(specs))
+	for _, r := range specs {
+		entry := map[string]string{"repo": r.Repo}
+		if r.Base != "" {
+			entry["base"] = r.Base
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // ForgetSessionOnRemote removes the session from the remote serve's own

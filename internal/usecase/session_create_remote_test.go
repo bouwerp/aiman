@@ -298,3 +298,24 @@ func TestRegisterSessionsOnRemoteReturnsForgotten(t *testing.T) {
 		t.Fatalf("forgotten = %v", forgotten)
 	}
 }
+
+func TestCreateSessionOnRemoteSendsRepos(t *testing.T) {
+	r := &createRemote{out: okCreateResponse}
+	_, err := CreateSessionOnRemote(context.Background(), r, RemoteCreateSpec{
+		Repo: "ignored/x", Branch: "b",
+		Repos: []domain.RepoSpec{{Repo: "o/a"}, {Repo: "o/b", Base: "dev"}},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var body string
+	for _, v := range r.written {
+		body = string(v)
+	}
+	if !strings.Contains(body, `"repos":[{"repo":"o/a"},{"base":"dev","repo":"o/b"}]`) {
+		t.Errorf("repos not sent: %s", body)
+	}
+	if strings.Contains(body, `"repo":"ignored/x"`) {
+		t.Errorf("repo sent beside repos: %s", body)
+	}
+}

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 )
@@ -35,4 +36,27 @@ func (s Session) MemberFor(path string) (SessionRepo, bool) {
 		}
 	}
 	return SessionRepo{}, false
+}
+
+// RepoSpec is one repository a workspace session is created with: the
+// owner/name slug and an optional base ref (empty is the repo's default
+// branch).
+type RepoSpec struct {
+	Repo string
+	Base string
+}
+
+// WorkspaceGit is what a workspace create needs from the git manager beyond
+// RepositoryManager. CreateSession type-asserts it.
+type WorkspaceGit interface {
+	// BranchCheckedOut reports whether branch is checked out in any worktree
+	// of repo. It makes the main clone healthy and fetched first.
+	BranchCheckedOut(ctx context.Context, remote RemoteExecutor, repo Repo, branch string) (bool, error)
+	// SetupWorkspaceMember adds a worktree of repo at exactly path on branch:
+	// from origin/<branch>, tracking it, when origin has the branch, else a
+	// new branch from base, else from the repo's default branch. Worktree.Base
+	// reports the ref used.
+	SetupWorkspaceMember(ctx context.Context, remote RemoteExecutor, repo Repo, branch, base, path string) (Worktree, error)
+	// RemoveWorkspaceMember force-removes the worktree at path and prunes.
+	RemoveWorkspaceMember(ctx context.Context, remote RemoteExecutor, repo Repo, path string) error
 }
