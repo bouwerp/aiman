@@ -204,13 +204,14 @@ func wireFeed(ctx context.Context, srv *server.Server, cfg *config.Config, dir s
 		Agent: agent, Model: model,
 		Interval: f.IntervalOrDefault(), UrgentGap: f.UrgentGapOrDefault(),
 		DailyBatches: f.DailyBatchesOrDefault(), RunTimeout: f.RunTimeoutOrDefault(), ActionTTL: f.ActionTTLOrDefault(),
-		Digests:  db,
-		Context:  func(ctx context.Context) ([]feed.SessionFacts, error) { return srv.FeedContext(ctx, groups) },
-		SetFloor: lazy.SetFloor,
-		Gate:     srv.PressureOpen,
-		OnBatch:  srv.FeedBatchChanged,
-		OnAction: srv.FeedActionChanged,
-		Log:      log.Printf,
+		Digests:    db,
+		Context:    func(ctx context.Context) ([]feed.SessionFacts, error) { return srv.FeedContext(ctx, groups) },
+		SetFloor:   lazy.SetFloor,
+		Gate:       srv.PressureOpen,
+		OffSources: feedOffSources(f),
+		OnBatch:    srv.FeedBatchChanged,
+		OnAction:   srv.FeedActionChanged,
+		Log:        log.Printf,
 	})
 	if err != nil {
 		log.Printf("feed unavailable: %v", err)
@@ -235,4 +236,13 @@ func wireFeed(ctx context.Context, srv *server.Server, cfg *config.Config, dir s
 		go m.Run(ctx)
 	}
 	return lazy.Close
+}
+
+// feedOffSources is the config's switched-off sources as feed sources.
+func feedOffSources(f config.FeedConfig) []domain.FeedSource {
+	var out []domain.FeedSource
+	for _, s := range f.OffSources() {
+		out = append(out, domain.FeedSource(s))
+	}
+	return out
 }

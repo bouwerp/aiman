@@ -29,6 +29,9 @@ var feedSettings = []feedSetting{
 	{"agent", "", "a named agent instead of the tier"},
 	{"model", "", "the named agent's model"},
 	{"run_timeout", "5m", "limit for one run"},
+	{"sessions.enabled", "true", "read aiman sessions (waiting input, CI, ended, errors)"},
+	{"github.enabled", "true", "read GitHub notifications"},
+	{"slack.enabled", "true", "read Slack (needs a Slack login on the host)"},
 	{"slack.exclude", "none", "channel ids never read, comma separated"},
 	{"slack.calls_per_minute", "40", "budget of Slack history and replies calls"},
 	{"slack.bots", "none", "bot ids whose messages count as events"},
@@ -45,16 +48,21 @@ var feedSettings = []feedSetting{
 func applyFeedSetting(f *config.FeedConfig, key, value string) error {
 	v := strings.TrimSpace(value)
 	switch key {
-	case "enabled":
-		if v == "" {
-			f.Enabled = nil
-			return nil
-		}
-		b, err := parseFeedBool(v)
+	case "enabled", "sessions.enabled", "github.enabled", "slack.enabled":
+		p, err := parseFeedSwitch(key, v)
 		if err != nil {
 			return err
 		}
-		f.Enabled = &b
+		switch key {
+		case "enabled":
+			f.Enabled = p
+		case "sessions.enabled":
+			f.Sessions.Enabled = p
+		case "github.enabled":
+			f.GitHub.Enabled = p
+		default:
+			f.Slack.Enabled = p
+		}
 	case "interval":
 		if v != "" {
 			d, ok := parseFeedSettingDuration(v)
@@ -135,10 +143,13 @@ func feedSettingValue(f config.FeedConfig, key string) string {
 	}
 	switch key {
 	case "enabled":
-		if f.Enabled == nil {
-			return ""
-		}
-		return strconv.FormatBool(*f.Enabled)
+		return boolText(f.Enabled)
+	case "sessions.enabled":
+		return boolText(f.Sessions.Enabled)
+	case "github.enabled":
+		return boolText(f.GitHub.Enabled)
+	case "slack.enabled":
+		return boolText(f.Slack.Enabled)
 	case "interval":
 		return f.Interval
 	case "urgent_gap":
@@ -173,14 +184,28 @@ func feedSettingValue(f config.FeedConfig, key string) string {
 	return ""
 }
 
-func parseFeedBool(v string) (bool, error) {
-	switch strings.ToLower(v) {
-	case "true", "on", "yes", "1":
-		return true, nil
-	case "false", "off", "no", "0":
-		return false, nil
+func boolText(p *bool) string {
+	if p == nil {
+		return ""
 	}
-	return false, fmt.Errorf("enabled %q: want true or false", v)
+	return strconv.FormatBool(*p)
+}
+
+// parseFeedSwitch reads an on/off value; empty is nil, so the default
+// applies.
+func parseFeedSwitch(key, v string) (*bool, error) {
+	var b bool
+	switch strings.ToLower(v) {
+	case "":
+		return nil, nil
+	case "true", "on", "yes", "1":
+		b = true
+	case "false", "off", "no", "0":
+		b = false
+	default:
+		return nil, fmt.Errorf("%s %q: want true or false", key, v)
+	}
+	return &b, nil
 }
 
 func parseFeedInt(key, v string, lo int) (*int, error) {

@@ -189,3 +189,25 @@ func TestManagerRetriesUnreadableReplyOnce(t *testing.T) {
 		t.Errorf("briefs %q, batch %+v", briefs, b)
 	}
 }
+
+// Events of a switched-off source never join a batch.
+func TestPendingSkipsOffSources(t *testing.T) {
+	aimanEv := slackEv(2, "direct", "D2")
+	aimanEv.Source = "aiman"
+	ev := &stubEvents{events: []domain.FeedEvent{slackEv(1, "direct", "D1"), aimanEv, slackEv(3, "direct", "D3")}}
+	m, err := NewManager(ManagerOptions{
+		Events: ev, Store: repoFor(t), Now: func() time.Time { return t0 }, Dir: t.TempDir(), Agent: "claude",
+		Interval: time.Minute, OffSources: []domain.FeedSource{"aiman"},
+		RunJob: func(context.Context, agentjob.Job) (agentjob.JobResult, error) { return agentjob.JobResult{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
+		t.Fatalf("pending = %+v; want events 1 and 3", got)
+	}
+}

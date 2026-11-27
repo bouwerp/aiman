@@ -242,6 +242,13 @@ func (w *Writer) SetHealth(ctx context.Context, h Health) error {
 	return err
 }
 
+// DeleteHealth removes a source's health row, so a source switched off
+// leaves no stale state in feed.status.
+func (w *Writer) DeleteHealth(ctx context.Context, source domain.FeedSource) error {
+	_, err := w.db.ExecContext(ctx, `DELETE FROM health WHERE source = ?`, string(source))
+	return err
+}
+
 // Prune deletes events older than before and strictly below the prune floor.
 // With no floor row it deletes nothing.
 func (w *Writer) Prune(ctx context.Context, before time.Time) (int, error) {

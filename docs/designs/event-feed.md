@@ -553,6 +553,7 @@ The feed has its own settings page: Admin Menu (`m`) → **Feed**, one tab per r
 | `feed.slack.exclude` | none | Channels never read. Every other conversation the member is in is read. |
 | `feed.slack.calls_per_minute` | 40 | Budget of Slack history and replies calls. |
 | `feed.slack.bots` | none | Bot users whose messages count as events. |
+| `feed.sessions.enabled`, `feed.github.enabled`, `feed.slack.enabled` | true | Switch one source off: the collector does not poll it and clears its health, and the manager leaves its stored events out of batches. A serve reload (`c`) restarts a running collector so it reads the change. |
 | `feed.github.repos` | none | Repositories for PR and push events (phase 2 overlap). |
 | `feed.sessions.groups` | all | Groups whose root sessions count; empty is every root session. |
 | `feed.mute_days` | 7 | Length of a mute. |

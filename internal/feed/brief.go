@@ -35,6 +35,8 @@ brief tells you what to do.
 
 Propose actions the operator can approve, one per event that needs one.
 Skip noise. Each action has 1 to 4 options; the operator picks one.
+Name people by the name on an event's actor line ("Ana Smith (U123)" is Ana
+Smith), never by an id alone.
 
 ## Reply
 

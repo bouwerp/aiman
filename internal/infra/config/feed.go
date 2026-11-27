@@ -40,6 +40,7 @@ type FeedConfig struct {
 
 // FeedSlackConfig narrows what the feed collects from Slack.
 type FeedSlackConfig struct {
+	Enabled        *bool    `yaml:"enabled,omitempty"`
 	Exclude        []string `yaml:"exclude,omitempty"`
 	Bots           []string `yaml:"bots,omitempty"`
 	CallsPerMinute *int     `yaml:"calls_per_minute,omitempty"`
@@ -47,16 +48,52 @@ type FeedSlackConfig struct {
 
 // FeedGitHubConfig narrows what the feed collects from GitHub.
 type FeedGitHubConfig struct {
-	Repos []string `yaml:"repos,omitempty"`
+	Enabled *bool    `yaml:"enabled,omitempty"`
+	Repos   []string `yaml:"repos,omitempty"`
 }
 
-// FeedSessionsConfig narrows which sessions the feed reads.
+// FeedSessionsConfig narrows which sessions the feed reads. Enabled
+// switches the aiman source (session notifications and ledger rows).
 type FeedSessionsConfig struct {
-	Groups []string `yaml:"groups,omitempty"`
+	Enabled *bool    `yaml:"enabled,omitempty"`
+	Groups  []string `yaml:"groups,omitempty"`
 }
 
 // EnabledOrDefault reports whether the feed runs; unset is off.
 func (f FeedConfig) EnabledOrDefault() bool { return f.Enabled != nil && *f.Enabled }
+
+// Feed source names, as the collector stores them on events.
+const (
+	FeedSourceAiman  = "aiman"
+	FeedSourceGitHub = "github"
+	FeedSourceSlack  = "slack"
+)
+
+// SourceOn reports whether a feed source runs: unset is on, and a name this
+// config has no switch for is on.
+func (f FeedConfig) SourceOn(source string) bool {
+	var p *bool
+	switch source {
+	case FeedSourceAiman:
+		p = f.Sessions.Enabled
+	case FeedSourceGitHub:
+		p = f.GitHub.Enabled
+	case FeedSourceSlack:
+		p = f.Slack.Enabled
+	}
+	return p == nil || *p
+}
+
+// OffSources lists the sources switched off.
+func (f FeedConfig) OffSources() []string {
+	var out []string
+	for _, s := range []string{FeedSourceAiman, FeedSourceGitHub, FeedSourceSlack} {
+		if !f.SourceOn(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // IntervalOrDefault is the batch interval; a value outside 1m..60m or one
 // that does not parse keeps the default.

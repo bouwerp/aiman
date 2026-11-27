@@ -42,3 +42,22 @@ func TestFeedProjectedRuns(t *testing.T) {
 		t.Fatalf("projected %d cap %d, want 24 and 24", p, c)
 	}
 }
+
+func TestApplyFeedSourceSwitches(t *testing.T) {
+	var f config.FeedConfig
+	if err := applyFeedSetting(&f, "sessions.enabled", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if f.SourceOn(config.FeedSourceAiman) || !f.SourceOn(config.FeedSourceGitHub) || !f.SourceOn(config.FeedSourceSlack) {
+		t.Fatalf("switches after sessions off: %+v", f)
+	}
+	if feedSettingValue(f, "sessions.enabled") != "false" {
+		t.Errorf("value = %q", feedSettingValue(f, "sessions.enabled"))
+	}
+	if err := applyFeedSetting(&f, "slack.enabled", "maybe"); err == nil {
+		t.Error("slack.enabled=maybe accepted")
+	}
+	if err := applyFeedSetting(&f, "sessions.enabled", ""); err != nil || f.Sessions.Enabled != nil {
+		t.Fatalf("empty did not clear sessions.enabled: %v", err)
+	}
+}
