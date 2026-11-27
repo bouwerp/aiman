@@ -70,20 +70,23 @@ func prepareRestartSession(ctx context.Context, remote domain.RemoteExecutor, en
 }
 
 // restartKit pushes the user checklists and rebuilds the checklist half of
-// the kit. Only repository sessions get one; a hidden helper (reviewer,
-// handover) keeps Repo and Role, which pick its launch flags.
+// the kit. Only repository and workspace sessions get one; a hidden helper
+// (reviewer, handover) keeps Repo and Role, which pick its launch flags.
 func restartKit(ctx context.Context, remote domain.RemoteExecutor, p restartPrep) (domain.QualityKit, []string) {
 	s := p.Session
 	kit := domain.QualityKit{Repo: s.RepoName, Role: s.Role}
-	if s.RepoName == "" || s.RepoName == "No Repository" || s.Role.Hidden() {
+	if s.Role.Hidden() {
 		return kit, nil
 	}
-	var notes []string
-	if p.ChecklistDir != "" {
-		if _, err := PushUserChecklists(ctx, remote, p.ChecklistDir); err != nil {
-			notes = append(notes, fmt.Sprintf("Checklists not pushed: %v", err))
-		}
+	if s.IsWorkspace() {
+		notes := pushRestartChecklists(ctx, remote, p.ChecklistDir)
+		built, kitNotes := restartWorkspaceKit(ctx, remote, s)
+		return built, append(notes, kitNotes...)
 	}
+	if s.RepoName == "" || s.RepoName == "No Repository" {
+		return kit, nil
+	}
+	notes := pushRestartChecklists(ctx, remote, p.ChecklistDir)
 	var repoCfg config.RepoBootstrap
 	if p.Cfg != nil {
 		repoCfg, _ = config.LookupRepo(p.Cfg.Repos, s.RepoName)
@@ -100,6 +103,56 @@ func restartKit(ctx context.Context, remote domain.RemoteExecutor, p restartPrep
 		return kit, append(notes, fmt.Sprintf("Quality kit not built: %v", err))
 	}
 	return built, notes
+}
+
+// pushRestartChecklists pushes the laptop's user checklists; an empty dir
+// pushes nothing.
+func pushRestartChecklists(ctx context.Context, remote domain.RemoteExecutor, dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	if _, err := PushUserChecklists(ctx, remote, dir); err != nil {
+		return []string{fmt.Sprintf("Checklists not pushed: %v", err)}
+	}
+	return nil
+}
+
+// restartWorkspaceKit is the checklist half of a workspace session's kit:
+// every member's matching checklists, each listed once. DoneWhen stays nil
+// as for a repository restart.
+func restartWorkspaceKit(ctx context.Context, remote domain.RemoteExecutor, s domain.Session) (domain.QualityKit, []string) {
+	kit := domain.QualityKit{Role: s.Role}
+	var notes []string
+	seen := map[string]bool{}
+	for _, mem := range s.Members {
+		built, buildNotes, err := BuildQualityKit(ctx, remote, KitInput{
+			Repo:     mem.Repo,
+			Worktree: mem.WorktreePath,
+			Role:     s.Role,
+			Restart:  true,
+		})
+		notes = append(notes, buildNotes...)
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("Quality kit not built for %s: %v", mem.Repo, err))
+			continue
+		}
+		for _, c := range built.Checklists {
+			if !seen[c.Path] {
+				seen[c.Path] = true
+				kit.Checklists = append(kit.Checklists, c)
+			}
+		}
+	}
+	return kit, notes
+}
+
+// workspaceSlugs lists a workspace session's member repositories in order.
+func workspaceSlugs(s domain.Session) []string {
+	slugs := make([]string, len(s.Members))
+	for i, mem := range s.Members {
+		slugs[i] = mem.Repo
+	}
+	return slugs
 }
 
 // sameAgent reports whether two agent names mean one agent: a display name
@@ -228,7 +281,11 @@ func RestartSession(ctx context.Context, remote domain.RemoteExecutor, engine do
 		}
 	}
 	prompt = restartPrompt(prompt, mode)
-	prompt = InjectSharedContext(ctx, remote, workingDir, s.Group, s.RepoName, prompt)
+	if s.IsWorkspace() {
+		prompt = InjectWorkspaceContext(ctx, remote, workingDir, s.Group, workspaceSlugs(*s), prompt)
+	} else {
+		prompt = InjectSharedContext(ctx, remote, workingDir, s.Group, s.RepoName, prompt)
+	}
 	WriteMuseSessionID(ctx, remote, workingDir, agentCmd, s.ID)
 	if cfg.FreshAgent {
 		clearRemoteNativeSidecar(ctx, remote, s.ID)
