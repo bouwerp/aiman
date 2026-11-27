@@ -588,7 +588,6 @@ func (c *Config) MarshalServeConfig(host string) ([]byte, error) {
 		Overview:      c.Overview,
 		Sessions:      c.Sessions,
 		Design:        c.Design,
-		Artifacts:     c.Artifacts,
 		Review:        c.Review,
 		CI:            c.CI,
 		Repos:         c.Repos,

@@ -430,20 +430,22 @@ func parseArtifactSetup(args []string, cfg config.ArtifactsConfig) (artifactSetu
 // runArtifactSetup configures Cloudflare, or with --host-key stores the
 // host's R2 key. The token never reaches argv, the environment or output.
 func runArtifactSetup(args []string, in io.Reader, out, errOut io.Writer) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
 	var conf config.ArtifactsConfig
 	if cfg, err := config.Load(); err == nil {
 		conf = cfg.Artifacts
-	} else {
+	}
+	conf, err = config.HostArtifacts(home, conf)
+	if err != nil {
 		fmt.Fprintf(errOut, "aiman artifact setup: warning: %v\n", err)
 	}
 	parsed, err := parseArtifactSetup(args, conf)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return artifactUsage()
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
 	}
 	if parsed.hostKey {
 		if isTerminal(in) {
@@ -474,7 +476,29 @@ func runArtifactSetup(args []string, in io.Reader, out, errOut io.Writer) error 
 		writeCLIError(server.CodePublishFailed, err.Error())
 		return err
 	}
-	return writeJSON(map[string]any{"type": "artifact_setup", "app_id": res.AppID, "aud": res.AUD, "policy_id": res.PolicyID})
+	saved := hostArtifactsFrom(parsed, conf.Auth)
+	if err := config.SaveHostArtifacts(home, saved); err != nil {
+		writeCLIError(server.CodePublishFailed, "save "+config.HostArtifactsPath(home)+": "+err.Error())
+		return err
+	}
+	return writeJSON(map[string]any{
+		"type": "artifact_setup", "app_id": res.AppID, "aud": res.AUD, "policy_id": res.PolicyID,
+		"config": config.HostArtifactsPath(home),
+	})
+}
+
+// hostArtifactsFrom is what setup saves to the host's artifacts.yaml. With
+// --cf-oauth the auth is pinned to cf_oauth; otherwise an earlier choice
+// stays, and unset lets serve pick from the credentials it finds.
+func hostArtifactsFrom(p artifactSetupArgs, auth string) config.ArtifactsConfig {
+	if p.cfOAuth {
+		auth = config.ArtifactsAuthCFOAuth
+	}
+	team := strings.TrimSuffix(p.cfg.TeamDomain, ".cloudflareaccess.com")
+	return config.ArtifactsConfig{
+		Host: p.cfg.Host, AccountID: p.cfg.AccountID, Bucket: p.cfg.Bucket,
+		Owners: p.cfg.Owners, Team: team, IdentityProvider: p.cfg.IdentityProvider, Auth: auth,
+	}
 }
 
 func isTerminal(r io.Reader) bool {
