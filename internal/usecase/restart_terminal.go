@@ -61,6 +61,7 @@ func restartTerminal(ctx context.Context, remote TerminalExecutor, s *domain.Ses
 		root = ""
 	}
 	TrustWorkspacePaths(ctx, remote, spec.WorkingDir, root)
+	trustWorkspaceMembers(ctx, remote, *s)
 
 	env := make(map[string]string, len(spec.Env)+len(spec.Secrets))
 	for k, v := range spec.Env {

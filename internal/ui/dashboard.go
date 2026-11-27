@@ -1207,7 +1207,9 @@ func (m *Model) toggleTunnelCmd(s domain.Session, t domain.Tunnel, start bool) t
 }
 
 func (m *Model) validateTerminationPreconditions(s domain.Session) error {
-	if s.WorktreePath == "" {
+	// A workspace directory is not a git checkout; serve's session.terminate
+	// checks every member worktree before it stops anything.
+	if s.WorktreePath == "" || terminateViaServe(s) {
 		return nil
 	}
 
@@ -2410,6 +2412,9 @@ func (m *Model) runTerminateStepCmd(s domain.Session, forced bool, index int) te
 // A forced termination inserts a "discard local changes" step at index 1 and shifts the
 // rest down by one, which is why the index is remapped before dispatch.
 func (m *Model) runTerminateStep(index int, s domain.Session, forced bool) error {
+	if terminateViaServe(s) {
+		return m.runWorkspaceTerminateStep(index, s, forced)
+	}
 	ctx := context.Background()
 
 	if index == 0 {
@@ -2467,6 +2472,16 @@ func (m *Model) terminateSaveContext(ctx context.Context, s domain.Session) erro
 		return skipReason("no context saved (no remote configured)")
 	}
 	m.writeForgetHandover(ctx, remote, s)
+	return m.terminateSnapshotPane(ctx, s)
+}
+
+// terminateSnapshotPane saves the session's pane as a snapshot. Every failure
+// is a skip, for the reason terminateSaveContext gives.
+func (m *Model) terminateSnapshotPane(ctx context.Context, s domain.Session) error {
+	remote, ok := resolveRemote(m.cfg, s)
+	if !ok {
+		return skipReason("no context saved (no remote configured)")
+	}
 	if m.snapshotManager == nil {
 		return skipReason("no context saved (snapshots unavailable)")
 	}
@@ -3449,6 +3464,10 @@ func (m *Model) applyTerminateStepMsg(msg terminateStepMsg, cmds []tea.Cmd) (tea
 	ts, ok := m.terminatingSessions[msg.sessionID]
 	if !ok {
 		return m, nil
+	}
+	if cmd, aborted := m.abortWorkspaceTerminate(ts, msg); aborted {
+		m.log("Terminate %s — serve refused: %v", ts.session.TerminalName, msg.err)
+		return m, cmd
 	}
 	if msg.err != nil {
 		var skip skipReason

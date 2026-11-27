@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -376,18 +378,18 @@ func (s *Server) terminateTree(ctx context.Context, reqID string, sess domain.Se
 	var result map[string]any
 	var ended []string
 	for i, g := range going {
-		removed, note := s.removeWorktree(ctx, plans[i], discard)
+		out := s.removeTree(ctx, plans[i], discard)
 		if err := s.dropSession(ctx, g, "terminate"); err != nil {
 			return errResp(reqID, CodeInvalidParams, fmt.Sprintf("session %s: %v", sessionLabel(g), err))
 		}
-		payload := map[string]any{"reason": "terminate", "worktree_removed": removed, "discard": discard}
+		payload := map[string]any{"reason": "terminate", "worktree_removed": out.removed, "discard": discard}
 		if g.ID != sess.ID {
 			payload["terminated_with"] = sess.ID
 			ended = append(ended, g.ID)
 		}
 		s.appendEvent(ctx, g.ID, actor, domain.EventSessionEnded, payload)
 		if g.ID == sess.ID {
-			result = terminatedResult(sess, plans[i], removed, note)
+			result = terminatedResult(sess, plans[i], out)
 		}
 	}
 	if len(ended) > 0 {
@@ -465,28 +467,66 @@ func (s *Server) planTeardown(ctx context.Context, reqID string, going, list []d
 	for i := len(going) - 1; i >= 0; i-- {
 		g := going[i]
 		plan := s.planWorktreeRemoval(ctx, g, staying)
-		if plan.removable() {
-			if owner, dup := claimed[plan.info.Root]; dup {
-				plan.keep = "session " + owner + " removes it"
+		claim := func(p *worktreePlan) {
+			if !p.removable() {
+				return
+			}
+			if owner, dup := claimed[p.info.Root]; dup {
+				p.keep = "session " + owner + " removes it"
 			} else {
-				claimed[plan.info.Root] = sessionLabel(g)
+				claimed[p.info.Root] = sessionLabel(g)
 			}
 		}
+		claim(&plan)
+		for j := range plan.members {
+			claim(&plan.members[j].plan)
+		}
 		plans[i] = plan
-		if !plan.removable() || discard {
+		if discard {
 			continue
 		}
-		loss, err := worktree.Pending(ctx, plan.info)
+		loss, root, err := planLoss(ctx, plan)
 		if err != nil {
-			r := errResp(reqID, CodeInvalidParams, fmt.Sprintf("cannot read worktree %s: %v", plan.info.Root, err))
+			r := errResp(reqID, CodeInvalidParams, fmt.Sprintf("cannot read worktree %s: %v", root, err))
 			return nil, &r
 		}
 		if !loss.Empty() {
-			r := worktreeDirtyResp(reqID, g, plan.info, loss)
+			r := worktreeDirtyResp(reqID, g, root, loss)
 			return nil, &r
 		}
 	}
 	return plans, nil
+}
+
+// planLoss reads what removing plan's worktrees would lose. A workspace
+// session's members add up, each path prefixed with its member's directory
+// name. root names the tree in a message: the failing member on an error.
+func planLoss(ctx context.Context, plan worktreePlan) (worktree.Loss, string, error) {
+	if plan.wsDir == "" {
+		if !plan.removable() {
+			return worktree.Loss{}, plan.info.Root, nil
+		}
+		loss, err := worktree.Pending(ctx, plan.info)
+		return loss, plan.info.Root, err
+	}
+	var total worktree.Loss
+	for _, m := range plan.members {
+		if !m.plan.removable() {
+			continue
+		}
+		loss, err := worktree.Pending(ctx, m.plan.info)
+		if err != nil {
+			return worktree.Loss{}, m.plan.info.Root, err
+		}
+		total.ChangedFiles += loss.ChangedFiles
+		total.UnpushedCommits += loss.UnpushedCommits
+		for _, p := range loss.Paths {
+			if len(total.Paths) < worktree.MaxLossPaths {
+				total.Paths = append(total.Paths, m.dir()+"/"+p)
+			}
+		}
+	}
+	return total, plan.wsDir, nil
 }
 
 // writeForgetHandovers writes every going session's handover at once, under one
@@ -507,9 +547,9 @@ func (s *Server) writeForgetHandovers(ctx context.Context, going []domain.Sessio
 	wg.Wait()
 }
 
-func worktreeDirtyResp(id string, sess domain.Session, info worktree.Info, loss worktree.Loss) Response {
+func worktreeDirtyResp(id string, sess domain.Session, root string, loss worktree.Loss) Response {
 	msg := fmt.Sprintf("worktree %s of session %s has %d changed files and %d unpushed commits",
-		info.Root, sessionLabel(sess), loss.ChangedFiles, loss.UnpushedCommits)
+		root, sessionLabel(sess), loss.ChangedFiles, loss.UnpushedCommits)
 	paths := loss.Paths
 	if paths == nil {
 		paths = []string{}
@@ -532,27 +572,42 @@ func runningChildren(sess domain.Session, list []domain.Session) []string {
 }
 
 // terminatedResult is the session_terminated answer. worktree_note says why a
-// worktree stayed.
-func terminatedResult(sess domain.Session, plan worktreePlan, removed bool, note string) map[string]any {
+// worktree stayed. A workspace session adds repos, one entry per member.
+func terminatedResult(sess domain.Session, plan worktreePlan, out treeRemoval) map[string]any {
 	branch := plan.info.Branch
 	if branch == "" {
 		branch = sess.Branch
 	}
 	result := map[string]any{
-		"type": "session_terminated", "session": sess.ID, "worktree_removed": removed, "branch": branch,
+		"type": "session_terminated", "session": sess.ID, "worktree_removed": out.removed, "branch": branch,
 	}
-	if note != "" {
-		result["worktree_note"] = note
+	if out.note != "" {
+		result["worktree_note"] = out.note
+	}
+	if out.repos != nil {
+		result["repos"] = out.repos
 	}
 	return result
 }
 
 // worktreePlan is what teardown may do with a session's worktree. keep says why
-// it stays; an empty keep means it is this session's own linked worktree.
+// it stays; an empty keep means it is this session's own linked worktree. A
+// workspace session's plan has wsDir set and one plan per member instead.
 type worktreePlan struct {
-	info worktree.Info
-	keep string
+	info    worktree.Info
+	keep    string
+	wsDir   string
+	members []memberPlan
 }
+
+// memberPlan is one member worktree of a workspace session.
+type memberPlan struct {
+	repo domain.SessionRepo
+	plan worktreePlan
+}
+
+// dir is the member's directory name inside the workspace directory.
+func (m memberPlan) dir() string { return filepath.Base(m.repo.WorktreePath) }
 
 func (p worktreePlan) removable() bool { return p.keep == "" }
 
@@ -560,10 +615,22 @@ func (p worktreePlan) removable() bool { return p.keep == "" }
 // other session uses may go, so a dirty main checkout or a shared tree is not
 // refused either: terminating loses nothing in it.
 func (s *Server) planWorktreeRemoval(ctx context.Context, sess domain.Session, list []domain.Session) worktreePlan {
-	if strings.TrimSpace(sess.WorktreePath) == "" {
+	if sess.IsWorkspace() {
+		plan := worktreePlan{wsDir: sess.WorktreePath, keep: "it is a workspace directory"}
+		for _, m := range sess.Members {
+			plan.members = append(plan.members, memberPlan{repo: m, plan: planTreeRemoval(ctx, sess, m.WorktreePath, list)})
+		}
+		return plan
+	}
+	return planTreeRemoval(ctx, sess, sess.WorktreePath, list)
+}
+
+// planTreeRemoval plans the one worktree at path.
+func planTreeRemoval(ctx context.Context, sess domain.Session, path string, list []domain.Session) worktreePlan {
+	if strings.TrimSpace(path) == "" {
 		return worktreePlan{keep: "the session has no worktree"}
 	}
-	info := worktree.Inspect(ctx, sess.WorktreePath)
+	info := worktree.Inspect(ctx, path)
 	switch info.Kind {
 	case worktree.KindMain:
 		return worktreePlan{info: info, keep: "it is the repository's main checkout"}
@@ -585,7 +652,7 @@ func worktreeUser(root string, sess domain.Session, list []domain.Session) (stri
 		if other.ID == sess.ID || (other.ParentID == sess.ID && other.Role.Hidden()) {
 			continue
 		}
-		if !pathWithin(other.WorktreePath, root) && !pathWithin(other.WorkingDirectory, root) {
+		if !pathWithin(other.WorktreePath, root) && !pathWithin(other.WorkingDirectory, root) && !memberWithin(other, root) {
 			continue
 		}
 		for _, label := range []string{other.Name, other.TerminalName, other.ID} {
@@ -595,6 +662,16 @@ func worktreeUser(root string, sess domain.Session, list []domain.Session) (stri
 		}
 	}
 	return "", false
+}
+
+// memberWithin reports a member worktree of a workspace session inside root.
+func memberWithin(sess domain.Session, root string) bool {
+	for _, m := range sess.Members {
+		if pathWithin(m.WorktreePath, root) {
+			return true
+		}
+	}
+	return false
 }
 
 func pathWithin(p, root string) bool {
@@ -638,6 +715,63 @@ func (s *Server) stopReviewer(ctx context.Context, reviewer domain.Session) {
 	if err := s.dropSession(ctx, reviewer, "reviewer_stopped"); err != nil {
 		log.Printf("session.terminate: forget reviewer %s: %v", reviewer.ID, err)
 	}
+}
+
+// treeRemoval is what teardown did with a session's worktrees. repos is set
+// for a workspace session only.
+type treeRemoval struct {
+	removed bool
+	note    string
+	repos   []map[string]any
+}
+
+// removeTree removes a session's worktree, or for a workspace session each member
+// worktree and then the workspace directory. The directory goes only when
+// nothing but aiman's scaffolding is left in it, and removed is true only when
+// every member and the directory went.
+func (s *Server) removeTree(ctx context.Context, plan worktreePlan, discard bool) treeRemoval {
+	if plan.wsDir == "" {
+		removed, note := s.removeWorktree(ctx, plan, discard)
+		return treeRemoval{removed: removed, note: note}
+	}
+	out := treeRemoval{removed: true, repos: []map[string]any{}}
+	for _, m := range plan.members {
+		removed, note := s.removeWorktree(ctx, m.plan, discard)
+		branch := m.repo.Branch
+		if branch == "" {
+			branch = m.plan.info.Branch
+		}
+		entry := map[string]any{"repo": m.repo.Repo, "branch": branch, "worktree_removed": removed}
+		if note != "" {
+			entry["worktree_note"] = note
+		}
+		out.repos = append(out.repos, entry)
+		out.removed = out.removed && removed
+	}
+	if !removeWorkspaceDir(ctx, plan.wsDir) {
+		out.removed = false
+		out.note = "the workspace directory " + plan.wsDir + " still holds files"
+	}
+	if !out.removed && out.note == "" {
+		out.note = "some member worktrees stayed; see repos"
+	}
+	return out
+}
+
+// removeWorkspaceDir clears aiman's scaffolding from the workspace directory
+// and removes it when that left it empty. It reports whether the directory is
+// gone.
+func removeWorkspaceDir(ctx context.Context, ws string) bool {
+	if strings.TrimSpace(ws) == "" {
+		return true
+	}
+	if _, err := os.Lstat(ws); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	// rmdir refuses a directory with anything else in it, which is the point.
+	_ = exec.CommandContext(ctx, "sh", "-c", usecase.WorkspaceRemoveDirScript(ws)).Run() // #nosec G204 -- every path in the script is shellx-quoted
+	_, err := os.Lstat(ws)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // removeWorktree runs last, with the agent gone. Without discard it reads the
