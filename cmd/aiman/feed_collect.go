@@ -61,12 +61,18 @@ func runFeedCollect(args []string) error {
 	defer db.Close()
 
 	sock := server.SocketPath(dir)
-	sources := []feedcollect.Source{
-		feedcollect.NewAimanSource(feedServeRPC(sock), true),
-		feedcollect.NewGitHubSource(feedGH),
+	sources := feedSources(cfg.Feed, func() feedcollect.Source { return feedcollect.NewAimanSource(feedServeRPC(sock), true) },
+		func() feedcollect.Source { return feedcollect.NewGitHubSource(feedGH) },
+		func() feedcollect.Source { return feedSlackSource(dir, cfg) })
+	for _, off := range cfg.Feed.OffSources() {
+		log.Printf("feed: the %s source is switched off", off)
+		if err := db.DeleteHealth(context.Background(), domain.FeedSource(off)); err != nil {
+			log.Printf("feed: clear %s health: %v", off, err)
+		}
 	}
-	if src := feedSlackSource(dir, cfg); src != nil {
-		sources = append(sources, src)
+	if len(sources) == 0 {
+		log.Printf("feed: every source is switched off; the collector does not run")
+		return nil
 	}
 	c, err := feedcollect.New(feedcollect.Options{
 		DB: db, Sources: sources, Retention: retention, Log: log.Printf,
@@ -82,6 +88,25 @@ func runFeedCollect(args []string) error {
 	}
 	log.Printf("feed: collector stopped")
 	return nil
+}
+
+// feedSources builds the sources the config leaves on, in the order aiman,
+// GitHub, Slack. A constructor that answers nil (Slack with no login) adds
+// nothing.
+func feedSources(f config.FeedConfig, aiman, github, slackSrc func() feedcollect.Source) []feedcollect.Source {
+	var out []feedcollect.Source
+	for _, s := range []struct {
+		name  string
+		build func() feedcollect.Source
+	}{{config.FeedSourceAiman, aiman}, {config.FeedSourceGitHub, github}, {config.FeedSourceSlack, slackSrc}} {
+		if !f.SourceOn(s.name) {
+			continue
+		}
+		if src := s.build(); src != nil {
+			out = append(out, src)
+		}
+	}
+	return out
 }
 
 // feedSlackSource is the Slack source when the member has a Slack login,

@@ -66,6 +66,8 @@ type ManagerOptions struct {
 	Context func(ctx context.Context) ([]SessionFacts, error)
 	// SetFloor publishes the prune floor to feed.db; nil skips it.
 	SetFloor func(ctx context.Context, minEventID int64) error
+	// OffSources are sources switched off: their events never join a batch.
+	OffSources []domain.FeedSource
 	// Gate answers false while the host is under pressure; nil is open.
 	Gate func() bool
 	// OnBatch and OnAction report changes (hub event, notification).
@@ -251,7 +253,7 @@ func (m *Manager) Tick(ctx context.Context) error {
 }
 
 // pending is the oldest maxBatchEvents unmuted events above the high-water
-// mark that are not the operator's own.
+// mark that are not the operator's own and whose source is on.
 func (m *Manager) pending(ctx context.Context) ([]domain.FeedEvent, error) {
 	hw, err := m.o.Store.FeedHighWater(ctx)
 	if err != nil {
@@ -271,7 +273,7 @@ func (m *Manager) pending(ctx context.Context) ([]domain.FeedEvent, error) {
 			if len(out) == maxBatchEvents {
 				break
 			}
-			if !e.Own && !Muted(e, mutes) {
+			if !e.Own && !Muted(e, mutes) && !slices.Contains(m.o.OffSources, e.Source) {
 				out = append(out, e)
 			}
 		}

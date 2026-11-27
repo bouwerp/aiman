@@ -240,8 +240,10 @@ func serviceOpScript(ctx context.Context, kind remotesvc.Kind, op, version strin
 			return "", err
 		}
 		return remotesvc.InstallEnableScript(kind, tag), nil
-	case "start", "restart", "reload":
+	case "start", "restart":
 		return remotesvc.StartScript(kind), nil
+	case "reload":
+		return remotesvc.ReloadScript(kind), nil
 	case "stop":
 		return remotesvc.StopScript(kind), nil
 	case "update":

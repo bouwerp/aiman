@@ -270,6 +270,17 @@ func UpdateScript(k Kind, tag string) string {
 	return script
 }
 
+// ReloadScript restarts k so it reads the pushed config again. A serve
+// reload also restarts the feed collector when it was running, because the
+// collector reads the feed block only at start.
+func ReloadScript(k Kind) string {
+	script := StartScript(k)
+	if k == KindServe {
+		script += feedLockstep()
+	}
+	return script
+}
+
 // gatewayLockstep runs after serve's start, under its set -e, so a failed
 // gateway install fails the update visibly. A stopped gateway gets the new
 // binary and stays stopped. The subshell keeps the start script's exports and

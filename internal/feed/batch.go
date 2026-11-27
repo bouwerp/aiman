@@ -108,8 +108,12 @@ func renderBatch(in BatchInput) string {
 
 func writeEvent(b *strings.Builder, nonce string, e domain.FeedEvent, h string, bodyMax int) {
 	fmt.Fprintf(b, "%s Event %d\n\n", h, e.ID)
+	actor := oneLine(e.Actor)
+	if e.ActorName != "" {
+		actor = oneLine(e.ActorName) + " (" + actor + ")"
+	}
 	fmt.Fprintf(b, "- source: %s\n- kind: %s\n- class: %s\n- urgent: %t\n- at: %s\n- actor: %s\n- thread: %s\n",
-		e.Source, oneLine(e.Kind), e.Class, e.Urgent, e.At.UTC().Format(time.RFC3339), oneLine(e.Actor), oneLine(e.ThreadKey))
+		e.Source, oneLine(e.Kind), e.Class, e.Urgent, e.At.UTC().Format(time.RFC3339), actor, oneLine(e.ThreadKey))
 	if e.Channel != "" {
 		fmt.Fprintf(b, "- channel: %s\n", oneLine(e.Channel))
 	}

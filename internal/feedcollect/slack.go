@@ -116,6 +116,8 @@ type slackSource struct {
 	// history answer showed a newer latest_reply since.
 	threadRead map[string]time.Time
 	threadDue  map[string]bool
+
+	userNames map[string]slackName // member id → name, see names
 }
 
 type budgetSlot struct {
@@ -208,6 +210,9 @@ func (s *slackSource) Poll(ctx context.Context, cursors map[string]string, mutes
 		if err := step(p); err != nil {
 			return nil, nil, err
 		}
+	}
+	if err := s.names(p); err != nil {
+		return nil, nil, err
 	}
 	for i := range p.events {
 		p.events[i] = finish(p.events[i], s.Name())

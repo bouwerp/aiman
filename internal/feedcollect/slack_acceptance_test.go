@@ -163,9 +163,20 @@ type slackEnv struct {
 
 func newSlackEnv(t *testing.T, api *fakeSlack, perMinute int, exclude, bots []string) *slackEnv {
 	t.Helper()
+	return newSlackEnvWith(t, api, api, perMinute, exclude, bots)
+}
+
+// newSlackEnvAPI runs the source over a fakeSlack wrapper with more methods.
+func newSlackEnvAPI(t *testing.T, api *namedSlack, perMinute int) *slackEnv {
+	t.Helper()
+	return newSlackEnvWith(t, api.fakeSlack, api, perMinute, nil, nil)
+}
+
+func newSlackEnvWith(t *testing.T, api *fakeSlack, src feedcollect.SlackAPI, perMinute int, exclude, bots []string) *slackEnv {
+	t.Helper()
 	env := &slackEnv{api: api, clock: newClock(collectT0), cursors: map[string]string{}}
 	env.src = feedcollect.NewSlackSource(feedcollect.SlackOptions{
-		API: api, Self: self, CallsPerMinute: perMinute, Exclude: exclude, Bots: bots,
+		API: src, Self: self, CallsPerMinute: perMinute, Exclude: exclude, Bots: bots,
 		Now: env.clock.Now,
 		Sleep: func(_ context.Context, d time.Duration) error {
 			env.sleeps = append(env.sleeps, d)
