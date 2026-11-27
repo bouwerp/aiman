@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,20 @@ import (
 type CIInfo struct {
 	Watch      bool     `json:"watch"`
 	PRNumber   int      `json:"pr_number,omitempty"`
+	PRState    string   `json:"pr_state,omitempty"`
+	HeadSHA    string   `json:"head_sha,omitempty"`
+	Escalated  []string `json:"escalated,omitempty"`
+	LastPolled string   `json:"last_polled_at,omitempty"` // RFC3339
+	LastError  string   `json:"last_error,omitempty"`
+	// Repos is one entry per member of a workspace session, in Ord order;
+	// the scalar fields above are then empty. A plain session has none.
+	Repos []CIRepoInfo `json:"repos,omitempty"`
+}
+
+// CIRepoInfo is one workspace member's PR watch.
+type CIRepoInfo struct {
+	Repo       string   `json:"repo"`
+	PRNumber   int      `json:"pr_number"`
 	PRState    string   `json:"pr_state,omitempty"`
 	HeadSHA    string   `json:"head_sha,omitempty"`
 	Escalated  []string `json:"escalated,omitempty"`
@@ -100,6 +115,9 @@ func (s *Server) handleCIWatch(ctx context.Context, req Request) Response {
 }
 
 func (s *Server) ciResponse(ctx context.Context, id string, sess domain.Session) Response {
+	if sess.IsWorkspace() {
+		return s.ciWorkspaceResponse(ctx, id, sess)
+	}
 	st, err := s.ciWatch.Status(ctx, sess.ID)
 	if err != nil {
 		return errResp(id, CodeInvalidParams, err.Error())
@@ -114,6 +132,33 @@ func (s *Server) ciResponse(ctx context.Context, id string, sess domain.Session)
 	}
 	if !st.LastPolledAt.IsZero() {
 		info.LastPolled = st.LastPolledAt.UTC().Format(time.RFC3339)
+	}
+	return Response{ID: id, Result: map[string]any{"type": "ci", "ci": info}}
+}
+
+// ciWorkspaceResponse lists each member's watch state, a member never polled
+// included, with no top-level PR.
+func (s *Server) ciWorkspaceResponse(ctx context.Context, id string, sess domain.Session) Response {
+	members := append([]domain.SessionRepo(nil), sess.Members...)
+	sort.SliceStable(members, func(i, j int) bool { return members[i].Ord < members[j].Ord })
+	info := CIInfo{Watch: sess.WatchesPR(), Repos: make([]CIRepoInfo, 0, len(members))}
+	for _, m := range members {
+		st, err := s.ciWatch.StatusRepo(ctx, sess.ID, m.Repo)
+		if err != nil {
+			return errResp(id, CodeInvalidParams, err.Error())
+		}
+		r := CIRepoInfo{
+			Repo:      m.Repo,
+			PRNumber:  st.PRNumber,
+			PRState:   st.PRState,
+			HeadSHA:   st.HeadSHA,
+			Escalated: st.Escalated,
+			LastError: st.LastError,
+		}
+		if !st.LastPolledAt.IsZero() {
+			r.LastPolled = st.LastPolledAt.UTC().Format(time.RFC3339)
+		}
+		info.Repos = append(info.Repos, r)
 	}
 	return Response{ID: id, Result: map[string]any{"type": "ci", "ci": info}}
 }
