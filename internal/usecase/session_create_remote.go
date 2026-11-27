@@ -221,6 +221,12 @@ type remoteCreateResult struct {
 		LaunchEffort     string `json:"launch_effort"`
 		Tier             string `json:"tier"`
 		ReviewPR         string `json:"review_pr"`
+		Repos            []struct {
+			Repo         string `json:"repo"`
+			Branch       string `json:"branch"`
+			BaseBranch   string `json:"base_branch"`
+			WorktreePath string `json:"worktree_path"`
+		} `json:"repos"`
 	} `json:"session"`
 	Error *struct {
 		Code    string `json:"code"`
@@ -244,8 +250,13 @@ func parseRemoteCreateResult(out string) (*domain.Session, error) {
 	if strings.TrimSpace(s.ID) == "" {
 		return nil, fmt.Errorf("remote create: response carried no session id")
 	}
+	var members []domain.SessionRepo
+	for i, r := range s.Repos {
+		members = append(members, domain.SessionRepo{Repo: r.Repo, Branch: r.Branch, BaseBranch: r.BaseBranch, WorktreePath: r.WorktreePath, Ord: i})
+	}
 	return &domain.Session{
 		ID:               s.ID,
+		Members:          members,
 		Name:             s.Name,
 		Group:            s.Group,
 		IssueKey:         s.IssueKey,

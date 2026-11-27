@@ -319,3 +319,16 @@ func TestCreateSessionOnRemoteSendsRepos(t *testing.T) {
 		t.Errorf("repo sent beside repos: %s", body)
 	}
 }
+
+func TestParseRemoteCreateResultCarriesMembers(t *testing.T) {
+	out := `{"type":"session","session":{"id":"ws-1","branch":"host-tab","worktree_path":"/w/host-tab@ws","repos":[` +
+		`{"repo":"o/a","branch":"host-tab","base_branch":"origin/main","worktree_path":"/w/host-tab@ws/a"},` +
+		`{"repo":"o/b","branch":"host-tab","base_branch":"develop","worktree_path":"/w/host-tab@ws/b"}]}}`
+	s, err := parseRemoteCreateResult(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.IsWorkspace() || len(s.Members) != 2 || s.Members[1] != (domain.SessionRepo{Repo: "o/b", Branch: "host-tab", BaseBranch: "develop", WorktreePath: "/w/host-tab@ws/b", Ord: 1}) {
+		t.Fatalf("members = %+v", s.Members)
+	}
+}
