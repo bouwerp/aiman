@@ -1368,6 +1368,9 @@ func (s *Server) applyFor(params *createParams, parentID string, existing []doma
 	if !ok {
 		return domain.Session{}, CodeNotFound, fmt.Errorf("parent session %s not found", parentID)
 	}
+	if parent.IsWorkspace() {
+		return domain.Session{}, CodeInvalidParams, fmt.Errorf("session %s is a multi-repo session: --for does not support one yet", parent.Name)
+	}
 	if parent.Branch == "" {
 		return domain.Session{}, CodeInvalidParams, fmt.Errorf("parent session %s has no branch to cut a child from", parent.Name)
 	}

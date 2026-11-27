@@ -104,6 +104,11 @@ func (s *Server) handleVerifyStatus(ctx context.Context, req Request) Response {
 	if !ok {
 		return errResp(req.ID, CodeNotFound, "session not found")
 	}
+	if p.Gate && sess.IsWorkspace() {
+		// A workspace directory has no tree to review: the before-PR gate
+		// passes it with a note, and ci.gate still checks each member.
+		return reviewResponse(req.ID, verify.Review{WorkerID: sess.ID, Tree: p.TreeHash, Status: verify.StatusDisabled, Error: WorkspaceVerifyGateNote})
+	}
 	if p.TreeHash != "" {
 		return s.verifyStatusForTree(ctx, req.ID, sess, p.TreeHash, p.Gate)
 	}
@@ -138,6 +143,10 @@ func (s *Server) verifyStatusForTree(ctx context.Context, id string, sess domain
 	}
 	return reviewResponse(id, r)
 }
+
+// WorkspaceVerifyGateNote is the before-PR gate's answer for a workspace
+// session.
+const WorkspaceVerifyGateNote = "verify does not cover multi-repo sessions yet; the PR goes out without a review"
 
 func reviewResponse(id string, r verify.Review) Response {
 	return Response{ID: id, Result: map[string]any{"type": "review", "review": r}}

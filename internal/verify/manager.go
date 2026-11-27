@@ -29,6 +29,10 @@ import (
 // ErrReviewerSession refuses to review a hidden reviewer or handover session.
 var ErrReviewerSession = errors.New("cannot verify a reviewer or handover session")
 
+// ErrMultiRepo refuses verify for a workspace session: a review covers one
+// repository's tree.
+var ErrMultiRepo = errors.New("verify does not support a multi-repo session yet")
+
 // defaultPoll is how often a running review's file and process are checked.
 const defaultPoll = 5 * time.Second
 
@@ -168,6 +172,9 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) (Review, error) {
 	}
 	if worker.Role.Hidden() {
 		return Review{}, ErrReviewerSession
+	}
+	if worker.IsWorkspace() {
+		return Review{}, ErrMultiRepo
 	}
 	if req.IfEnabled && !m.cfg.BeforePR {
 		return Review{WorkerID: worker.ID, Status: StatusDisabled}, nil

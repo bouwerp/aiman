@@ -21,6 +21,16 @@ func CIUnit(session, sha string, start time.Time) string {
 	return unitName("aiman-ci-" + session + "-" + prefix(sha, 12) + "-" + strconv.FormatInt(start.Unix(), 10))
 }
 
+// CIUnitFor is CIUnit for one member of a workspace session:
+// aiman-ci-<session>-<repo key>-<sha[:12]>-<start>.scope. An empty repo is
+// CIUnit.
+func CIUnitFor(session, repo, sha string, start time.Time) string {
+	if repo == "" {
+		return CIUnit(session, sha, start)
+	}
+	return unitName("aiman-ci-" + session + "-" + RepoKey(repo) + "-" + prefix(sha, 12) + "-" + strconv.FormatInt(start.Unix(), 10))
+}
+
 // VerifyUnit is the transient scope of one verify test command:
 // aiman-verify-<review>-<start unix seconds>.scope.
 func VerifyUnit(review string, start time.Time) string {

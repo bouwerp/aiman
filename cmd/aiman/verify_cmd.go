@@ -203,20 +203,48 @@ func runVerifyGate(flags map[string]string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	hash, err := verify.TreeHash(ctx, cwd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "verify: cannot hash the current tree: %v\n", err)
-		return errVerifyGateBlocked
-	}
+	hash, hashErr := verify.TreeHash(ctx, cwd)
 	sock, err := socketPath()
 	if err != nil {
+		if hashErr != nil {
+			fmt.Fprintf(os.Stderr, "verify: cannot hash the current tree: %v\n", hashErr)
+			return errVerifyGateBlocked
+		}
 		fmt.Fprintln(os.Stderr, "verify: no passing review; run `aiman verify --wait`")
 		return errVerifyGateBlocked
 	}
 	call := func(method string, p any) (server.Response, error) {
 		return server.Call(sock, method, p)
 	}
+	if hashErr != nil {
+		// A multi-repo session's directory is no checkout; serve passes it.
+		if workspaceGatePass(call, strings.TrimSpace(flags["session"])) {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "verify: cannot hash the current tree: %v\n", hashErr)
+		return errVerifyGateBlocked
+	}
 	return gateStatus(call, hash, strings.TrimSpace(flags["session"]))
+}
+
+// workspaceGatePass asks serve's gate with no tree and reports whether it
+// passes the session as a multi-repo one (a disabled review with a note),
+// printing the note.
+func workspaceGatePass(call func(string, any) (server.Response, error), session string) bool {
+	params := map[string]any{"gate": true}
+	if session != "" {
+		params["session"] = session
+	}
+	resp, err := call("verify.status", params)
+	if err != nil {
+		return false
+	}
+	review, err := decodeVerifyReview(resp)
+	if err != nil || review.Status != verify.StatusDisabled || review.Error == "" {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "verify: %s\n", review.Error)
+	return true
 }
 
 func gateStatus(call func(string, any) (server.Response, error), hash, session string) error {
@@ -235,6 +263,9 @@ func gateStatus(call func(string, any) (server.Response, error), hash, session s
 		return errVerifyGateBlocked
 	}
 	if review.Status == verify.StatusDisabled || review.Passed() {
+		if review.Status == verify.StatusDisabled && review.Error != "" {
+			fmt.Fprintf(os.Stderr, "verify: %s\n", review.Error)
+		}
 		return nil
 	}
 	if review.Required == 0 {

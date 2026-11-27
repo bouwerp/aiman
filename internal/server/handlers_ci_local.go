@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bouwerp/aiman/internal/agenthook"
 	"github.com/bouwerp/aiman/internal/cigate"
 	"github.com/bouwerp/aiman/internal/ciwatch"
 	"github.com/bouwerp/aiman/internal/domain"
@@ -108,9 +109,12 @@ func (s *Server) dispatchCILocal(ctx context.Context, req Request) Response {
 			return errResp(req.ID, CodeInvalidParams, err.Error())
 		}
 	}
-	t, fail := s.ciLocalTarget(ctx, req, p.Session)
+	t, fail := s.ciLocalTarget(ctx, req, p)
 	if fail != nil {
 		return *fail
+	}
+	if t.workspace() {
+		return s.handleCIGateWorkspace(ctx, req.ID, t, p)
 	}
 	switch req.Method {
 	case "ci.local":
@@ -130,16 +134,34 @@ type ciLocalParams struct {
 	Kind    string `json:"kind"`
 	Command string `json:"command"`
 	Draft   bool   `json:"draft"`
+	// Repo names the member of a workspace session (owner/name).
+	Repo string `json:"repo"`
+	// Cwd is the caller's working directory; inside a member of a
+	// workspace session it stands in for Repo on ci.local, ci.status and
+	// ci.ready.
+	Cwd string `json:"cwd"`
 }
 
-// ciTarget is a session and its checkout root.
+// ciTarget is a session and its checkout root. For a workspace session it
+// is one member (member set), or, for ci.gate before the command names a
+// member, the session alone (top empty).
 type ciTarget struct {
 	sess domain.Session
 	top  string
 	repo config.RepoBootstrap
+	// slug is the repository's owner/name: the session's, or the member's.
+	slug string
+	// member is the member's slug in a workspace session; empty otherwise.
+	// The runner keys runs and records by it.
+	member string
 }
 
-func (s *Server) ciLocalTarget(ctx context.Context, req Request, name string) (ciTarget, *Response) {
+// workspace reports whether t is a workspace session no member is chosen
+// for yet.
+func (t ciTarget) workspace() bool { return t.sess.IsWorkspace() && t.member == "" }
+
+func (s *Server) ciLocalTarget(ctx context.Context, req Request, p ciLocalParams) (ciTarget, *Response) {
+	name := p.Session
 	fail := func(code, msg string) (ciTarget, *Response) {
 		r := errResp(req.ID, code, msg)
 		return ciTarget{}, &r
@@ -158,11 +180,107 @@ func (s *Server) ciLocalTarget(ctx context.Context, req Request, name string) (c
 	if r, refused := s.refuseOutOfScope(ctx, req, sess.ID); refused {
 		return ciTarget{}, &r
 	}
+	if sess.IsWorkspace() {
+		return s.ciWorkspaceTarget(ctx, req, sess, p)
+	}
 	t, err := s.ciTargetFor(ctx, sess)
 	if err != nil {
 		return fail(CodeInvalidParams, err.Error())
 	}
 	return t, nil
+}
+
+// ciWorkspaceTarget picks the member of a workspace session a call is for:
+// by repo, else, except for ci.gate, by a cwd inside a member. ci.gate with
+// no repo gets the session alone and picks the member from the command.
+func (s *Server) ciWorkspaceTarget(ctx context.Context, req Request, sess domain.Session, p ciLocalParams) (ciTarget, *Response) {
+	fail := func(msg string) (ciTarget, *Response) {
+		r := errResp(req.ID, CodeInvalidParams, msg)
+		return ciTarget{}, &r
+	}
+	repo := strings.TrimSpace(p.Repo)
+	if repo != "" {
+		m, ok := memberBySlug(sess, repo)
+		if !ok {
+			return fail(fmt.Sprintf("%s is not a repository of multi-repo session %s; its repositories are %s", repo, sess.Name, memberSlugs(sess)))
+		}
+		t, err := s.ciTargetForMember(ctx, sess, m)
+		if err != nil {
+			return fail(err.Error())
+		}
+		return t, nil
+	}
+	if req.Method == "ci.gate" {
+		return ciTarget{sess: sess}, nil
+	}
+	if m, ok := memberForPath(sess, p.Cwd); ok {
+		t, err := s.ciTargetForMember(ctx, sess, m)
+		if err != nil {
+			return fail(err.Error())
+		}
+		return t, nil
+	}
+	return fail(fmt.Sprintf("%s is a multi-repo session: pass repo (--repo) as one of %s", sess.Name, memberSlugs(sess)))
+}
+
+// memberBySlug finds the member whose slug is repo, ignoring case.
+func memberBySlug(sess domain.Session, repo string) (domain.SessionRepo, bool) {
+	for _, m := range sess.Members {
+		if strings.EqualFold(m.Repo, strings.TrimSpace(repo)) {
+			return m, true
+		}
+	}
+	return domain.SessionRepo{}, false
+}
+
+// memberForPath finds the member holding path, as given and after
+// resolving symlinks.
+func memberForPath(sess domain.Session, path string) (domain.SessionRepo, bool) {
+	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
+		return domain.SessionRepo{}, false
+	}
+	if m, ok := sess.MemberFor(path); ok {
+		return m, true
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return domain.SessionRepo{}, false
+	}
+	if m, ok := sess.MemberFor(real); ok {
+		return m, true
+	}
+	for _, m := range sess.Members {
+		root, err := filepath.EvalSymlinks(m.WorktreePath)
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(root, real); err == nil && filepath.IsLocal(rel) || real == root {
+			return m, true
+		}
+	}
+	return domain.SessionRepo{}, false
+}
+
+// memberSlugs lists a workspace session's repositories for a message.
+func memberSlugs(sess domain.Session) string {
+	slugs := make([]string, 0, len(sess.Members))
+	for _, m := range sess.Members {
+		slugs = append(slugs, m.Repo)
+	}
+	return strings.Join(slugs, ", ")
+}
+
+// ciTargetForMember is ciTargetFor for one member of a workspace session.
+func (s *Server) ciTargetForMember(ctx context.Context, sess domain.Session, m domain.SessionRepo) (ciTarget, error) {
+	if m.WorktreePath == "" {
+		return ciTarget{}, fmt.Errorf("member %s has no worktree", m.Repo)
+	}
+	top, err := gitLine(ctx, m.WorktreePath, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return ciTarget{}, err
+	}
+	b, _ := config.LookupRepo(s.ciLocal.d.Repos, m.Repo)
+	return ciTarget{sess: sess, top: top, repo: b, slug: m.Repo, member: m.Repo}, nil
 }
 
 // ciTargetFor finds the session's checkout root and repo settings.
@@ -179,7 +297,7 @@ func (s *Server) ciTargetFor(ctx context.Context, sess domain.Session) (ciTarget
 		return ciTarget{}, err
 	}
 	b, _ := config.LookupRepo(s.ciLocal.d.Repos, sess.RepoName)
-	return ciTarget{sess: sess, top: top, repo: b}, nil
+	return ciTarget{sess: sess, top: top, repo: b, slug: sess.RepoName}, nil
 }
 
 // CILandGate is session.land's view of the local gate; nil when the gate is
@@ -215,7 +333,7 @@ func (g ciLandGate) PassedFor(ctx context.Context, child domain.Session, sha str
 }
 
 func (t ciTarget) options(nice int) (cigate.Options, error) {
-	opt := cigate.Options{Copy: t.repo.Copy, Nice: nice}
+	opt := cigate.Options{Copy: t.repo.Copy, Nice: nice, Repo: t.member}
 	if len(t.repo.CI.Local) > 0 {
 		raw := make([]cigate.RawCommand, 0, len(t.repo.CI.Local))
 		for _, c := range t.repo.CI.Local {
@@ -223,7 +341,7 @@ func (t ciTarget) options(nice int) (cigate.Options, error) {
 		}
 		l, err := cigate.BuildList("", raw)
 		if err != nil {
-			return opt, fmt.Errorf("repos.%s.ci.local: %w", t.sess.RepoName, err)
+			return opt, fmt.Errorf("repos.%s.ci.local: %w", t.slug, err)
 		}
 		opt.Override = &l
 	}
@@ -304,14 +422,14 @@ func (s *Server) ciStatus(ctx context.Context, t ciTarget) (CIStatus, error) {
 		// A broken list still gates: report it as present.
 		st.HasList = true
 	}
-	rec, ok, err := s.ciLocal.d.Runner.Record(t.sess.ID, sha)
+	rec, ok, err := s.ciLocal.d.Runner.RecordFor(t.sess.ID, t.member, sha)
 	if err != nil {
 		return st, err
 	}
 	if ok {
 		st.Record = &rec
 		if rec.Status == cigate.StatusQueued {
-			st.QueuePosition = s.ciLocal.d.Runner.QueuePosition(t.sess.ID)
+			st.QueuePosition = s.ciLocal.d.Runner.QueuePositionFor(t.sess.ID, t.member)
 		}
 		if rec.Status == cigate.StatusFail && len(rec.Commands) > 0 {
 			last := rec.Commands[len(rec.Commands)-1]
@@ -355,7 +473,7 @@ func (s *Server) ciGateFor(ctx context.Context, id string, t ciTarget, kind ciga
 		Draft:        draft,
 		Record:       st.Record,
 	}
-	key := prKey(t.sess.RepoName, t.top, branch)
+	key := prKey(t.slug, t.top, branch)
 	switch kind {
 	case cigate.KindPush:
 		if tag, ok := cigate.TagPushName(command); ok && isTagOnly(ctx, t.top, tag) {
@@ -375,7 +493,69 @@ func (s *Server) ciGateFor(ctx context.Context, id string, t ciTarget, kind ciga
 		s.ciLocal.cache.drop(key)
 	}
 	allow, reason := cigate.Decide(in)
+	if allow && t.member != "" && kind != cigate.KindPush && s.verifier != nil && s.verifier.BeforePR() {
+		reason = workspaceVerifyNote
+	}
 	return ciGateAnswer(id, allow, reason, st.SHA, in.PR)
+}
+
+// workspaceVerifyNote is the reason an allowed create or ready of a
+// workspace member carries while verify.before_pr is on.
+const workspaceVerifyNote = "aiman: verify does not cover multi-repo sessions yet; the local gate was checked for this repository only"
+
+// handleCIGateWorkspace judges ci.gate for a workspace session whose call
+// named no repo: the command must place the push or PR in one member.
+func (s *Server) handleCIGateWorkspace(ctx context.Context, id string, t ciTarget, p ciLocalParams) Response {
+	kind := cigate.Kind(strings.TrimSpace(p.Kind))
+	switch kind {
+	case cigate.KindPush, cigate.KindCreate, cigate.KindReady:
+	default:
+		return errResp(id, CodeInvalidParams, "kind must be push, create or ready")
+	}
+	sess := t.sess
+	if kind == cigate.KindPush {
+		dir, rest, ok := cigate.SplitPushDir(p.Command)
+		if !ok {
+			return ciGateAnswer(id, false, workspaceGateRefusal(sess, kind), "", nil)
+		}
+		abs := dir
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(sessionDir(sess), dir)
+		}
+		if m, ok := memberForPath(sess, abs); ok {
+			mt, err := s.ciTargetForMember(ctx, sess, m)
+			if err != nil {
+				return ciGateAnswer(id, false, fmt.Sprintf("aiman: %s is not a git checkout serve can read: %v", abs, err), "", nil)
+			}
+			return s.ciGateFor(ctx, id, mt, kind, rest, false)
+		}
+		if !filepath.IsAbs(dir) {
+			return ciGateAnswer(id, false, workspaceGateRefusal(sess, kind), "", nil)
+		}
+		return s.ciGateDirPush(ctx, id, t, dir, rest)
+	}
+	repo := ""
+	if q, ok := agenthook.GateQuestionForCommand(p.Command); ok {
+		repo = q.Repo
+	}
+	if repo == "" {
+		return ciGateAnswer(id, false, workspaceGateRefusal(sess, kind), "", nil)
+	}
+	m, ok := memberBySlug(sess, repo)
+	if !ok {
+		return ciGateAnswer(id, false, fmt.Sprintf("aiman: %s is not a repository of this multi-repo session; %s", repo, workspaceGateRefusal(sess, kind)), "", nil)
+	}
+	mt, err := s.ciTargetForMember(ctx, sess, m)
+	if err != nil {
+		return ciGateAnswer(id, false, err.Error(), "", nil)
+	}
+	return s.ciGateFor(ctx, id, mt, kind, p.Command, p.Draft)
+}
+
+// workspaceGateRefusal explains how to name the repository in a
+// multi-repo session.
+func workspaceGateRefusal(sess domain.Session, kind cigate.Kind) string {
+	return fmt.Sprintf("aiman: this is a multi-repo session, so the %s must name its repository: git -C <member dir> push for a push, gh -R <owner/name> pr create|ready for a PR. Repositories: %s", kind, memberSlugs(sess))
 }
 
 // ciGateDirPush judges git -C <dir> push for the checkout at dir: as the
@@ -390,7 +570,7 @@ func (s *Server) ciGateDirPush(ctx context.Context, id string, t ciTarget, dir, 
 	if err != nil {
 		return ciGateAnswer(id, false, fmt.Sprintf("aiman: %s is not a git checkout serve can read: %v", dir, err), "", nil)
 	}
-	if callerTop, err := filepath.EvalSymlinks(t.top); err == nil && callerTop == top {
+	if callerTop, err := filepath.EvalSymlinks(t.top); t.top != "" && err == nil && callerTop == top {
 		return s.ciGateFor(ctx, id, t, cigate.KindPush, rest, false)
 	}
 	owner, found, err := s.ciOwnerOf(ctx, top)
@@ -423,6 +603,16 @@ func (s *Server) ciOwnerOf(ctx context.Context, top string) (ciTarget, bool, err
 		return ciTarget{}, false, err
 	}
 	for _, sess := range list {
+		if sess.IsWorkspace() {
+			if m, ok := memberForPath(sess, top); ok {
+				if ot, err := s.ciTargetForMember(ctx, sess, m); err == nil {
+					if otTop, err := filepath.EvalSymlinks(ot.top); err == nil && otTop == top {
+						return ot, true, nil
+					}
+				}
+			}
+			continue
+		}
 		if !pathWithin(sess.WorkingDirectory, top) && !pathWithin(sess.WorktreePath, top) {
 			continue
 		}
@@ -578,8 +768,12 @@ func (s *Server) handleCIReady(ctx context.Context, id string, t ciTarget) Respo
 	branch, _ := gitLine(ctx, t.top, "symbolic-ref", "--short", "-q", "HEAD")
 	ready := *pr
 	ready.Draft = false
-	s.ciLocal.cache.put(prKey(t.sess.RepoName, t.top, branch), &ready)
-	return Response{ID: id, Result: map[string]any{"type": "ci_ready", "ready": true, "number": pr.Number}}
+	s.ciLocal.cache.put(prKey(t.slug, t.top, branch), &ready)
+	res := map[string]any{"type": "ci_ready", "ready": true, "number": pr.Number}
+	if t.member != "" && s.verifier != nil && s.verifier.BeforePR() {
+		res["note"] = workspaceVerifyNote
+	}
+	return Response{ID: id, Result: res}
 }
 
 // ciReadyCheck returns the session's open PR when it may go ready, else why
@@ -616,7 +810,7 @@ func (s *Server) ciReadyCheck(ctx context.Context, t ciTarget) (*cigate.PR, erro
 
 // verifiedHead applies the before-PR verify rule to the session's tree.
 func (s *Server) verifiedHead(ctx context.Context, t ciTarget) error {
-	if s.verifier == nil || !s.verifier.BeforePR() || t.sess.ReviewPR != "" || t.sess.FixPR != "" {
+	if s.verifier == nil || !s.verifier.BeforePR() || t.sess.ReviewPR != "" || t.sess.FixPR != "" || t.sess.IsWorkspace() {
 		return nil
 	}
 	tree, err := verify.TreeHash(ctx, t.top)
