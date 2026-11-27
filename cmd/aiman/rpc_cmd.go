@@ -19,6 +19,7 @@ var rpcMethods = map[string]bool{
 	"artifact.list":       true,
 	"artifact.get":        true,
 	"session.move":        true,
+	"session.pin":         true,
 	"session.rename":      true,
 	"session.get":         true,
 	"session.log":         true,

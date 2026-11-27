@@ -60,7 +60,7 @@ func groupedSessionItems(flat []item, collapsed map[string]bool, collapsedSessio
 	by := map[string]*bucket{}
 	byID := itemByID(flat)
 	for _, it := range flat {
-		g := groupHomeKey(it, byID)
+		g := listBucketKey(it, byID)
 		b, ok := by[g]
 		if !ok {
 			b = &bucket{key: g}
@@ -70,9 +70,26 @@ func groupedSessionItems(flat []item, collapsed map[string]bool, collapsedSessio
 		b.items = append(b.items, it)
 	}
 	sort.Strings(order)
+	order = pinnedFirst(order)
 	var out []list.Item
 	for _, key := range order {
 		b := by[key]
+		if key == pinnedBucketKey {
+			header := item{
+				header:    true,
+				pinned:    true,
+				activity:  groupRollup(b.items),
+				groupN:    len(b.items),
+				collapsed: collapsed[key],
+			}
+			out = append(out, header)
+			if !header.collapsed {
+				for _, it := range flattenSessionForest(b.items, collapsedSessions) {
+					out = append(out, it)
+				}
+			}
+			continue
+		}
 		home := homeRoot(b.items[0], byID)
 		groupName := domain.GroupLabel(home.session.Group)
 		header := item{
@@ -137,7 +154,7 @@ func (m *Model) revealSession(flat []item, id string) bool {
 		return false
 	}
 	changed := false
-	if gk := groupHomeKey(it, byID); m.collapsedGroups[gk] {
+	if gk := listBucketKey(it, byID); m.collapsedGroups[gk] {
 		delete(m.collapsedGroups, gk)
 		changed = true
 	}
@@ -328,6 +345,9 @@ func (i item) treeBranch() string {
 
 func (i item) headerPlainTitle() string {
 	label := domain.GroupLabel(i.session.Group)
+	if i.pinned {
+		label = pinnedHeaderLabel
+	}
 	count := ""
 	if i.groupN > 0 {
 		count = fmt.Sprintf(" · %d", i.groupN)
@@ -394,6 +414,11 @@ func renderSessionHeader(it item, selected bool, width int) string {
 		return ""
 	}
 	label := domain.GroupLabel(it.session.Group)
+	headFg := headerLabelColor
+	if it.pinned {
+		label = pinnedHeaderLabel
+		headFg = a1Pin
+	}
 	count := ""
 	if it.groupN > 0 {
 		count = fmt.Sprintf(" · %d", it.groupN)
@@ -402,7 +427,6 @@ func renderSessionHeader(it item, selected bool, width int) string {
 	if it.collapsed {
 		glyph = "▸"
 	}
-	headFg := headerLabelColor
 	if selected {
 		headFg = headerSelFg
 	}

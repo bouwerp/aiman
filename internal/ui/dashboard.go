@@ -260,6 +260,7 @@ type item struct {
 	remoteName  string // short name of the remote for display
 	syncStale   bool   // mutagen sync is missing/unhealthy/pointing at wrong host
 	header      bool   // group header row, not a session
+	pinned      bool   // on a header: the Pinned section, not a group
 	groupN      int    // session count, set on headers
 	treeLast    bool   // last among siblings; draws └─ instead of ├─
 	treeDepth   int    // 0 for a group root, 1+ under a parent session
@@ -763,7 +764,7 @@ func (m *Model) applyRemoteFilter() {
 	selectedHeaderKey := ""
 	if it, ok := m.list.SelectedItem().(item); ok {
 		if it.header {
-			selectedHeaderKey = groupCollapseKey(it.session.Group, it.remoteName)
+			selectedHeaderKey = it.headerKey()
 		} else {
 			selectedID = it.session.ID
 		}
@@ -829,7 +830,7 @@ func (m *Model) applyRemoteFilter() {
 	case selectedHeaderKey != "":
 		found := false
 		for i, it := range filtered {
-			if si, ok := it.(item); ok && si.header && groupCollapseKey(si.session.Group, si.remoteName) == selectedHeaderKey {
+			if si, ok := it.(item); ok && si.header && si.headerKey() == selectedHeaderKey {
 				m.list.Select(i)
 				found = true
 				break
@@ -892,6 +893,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "quick session")),
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "rename session or group")),
 			key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "assign session group")),
+			key.NewBinding(key.WithKeys("*"), key.WithHelp("*", "pin / unpin session")),
 			key.NewBinding(key.WithKeys("enter", " ", "space"), key.WithHelp("enter", "collapse/expand group")),
 			key.NewBinding(key.WithKeys("ctrl+r", "s"), key.WithHelp("s", "resume / restart (auto agent)")),
 			key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "switch agent")),
@@ -5026,6 +5028,9 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	}
 	if msg.String() == "e" {
 		if it, ok := m.list.SelectedItem().(item); ok && it.header {
+			if it.pinned {
+				return m, nil, true
+			}
 			return m.startRenameGroup(it)
 		}
 		it, ok := m.selectedSessionItem()
@@ -5041,6 +5046,13 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.renamingSessionID = it.session.ID
 		m.state = viewStateRenameSession
 		return m, m.genericInput.Init(), true
+	}
+	if msg.String() == "*" && m.currentTab == tabSessions {
+		it, ok := m.selectedSessionItem()
+		if !ok {
+			return m, nil, true
+		}
+		return m, m.toggleSessionPin(it.session.ID), true
 	}
 	if msg.String() == "g" {
 		it, ok := m.selectedSessionItem()

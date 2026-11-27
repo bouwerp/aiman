@@ -16,4 +16,6 @@ var (
 	// a1Child is the child-count badge on a parent row: bright and apart from
 	// the state colours, so a session with children stands out at a glance.
 	a1Child = lipgloss.Color("#ff6fd8")
+	// a1Pin is the Pinned section's header: bright gold, apart from every group.
+	a1Pin = lipgloss.Color("#ffd75f")
 )

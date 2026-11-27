@@ -24,28 +24,32 @@ var sessionIdentityRPC = func(ctx context.Context, r config.Remote, method strin
 	return usecase.ServeRPC(ctx, dialRemoteSSH(r), method, params)
 }
 
-// identityChange is one session.move or session.rename call.
+// identityChange is one session.move, session.rename or session.pin call.
 type identityChange struct {
-	method string // session.move or session.rename
+	method string // session.move, session.rename or session.pin
 	id     string
 	value  string // the group for a move, the name for a rename
+	pinned bool   // the pin for session.pin
 }
 
-func (c identityChange) params() map[string]string {
-	if c.method == "session.rename" {
-		return map[string]string{"id": c.id, "name": c.value}
+func (c identityChange) params() map[string]any {
+	switch c.method {
+	case "session.rename":
+		return map[string]any{"id": c.id, "name": c.value}
+	case "session.pin":
+		return map[string]any{"id": c.id, "pinned": c.pinned}
 	}
-	return map[string]string{"id": c.id, "group": c.value}
+	return map[string]any{"id": c.id, "group": c.value}
 }
 
-// sessionIdentitySyncMsg reports serve's answers to a group move or rename.
+// sessionIdentitySyncMsg reports serve's answers to a group move, rename or pin.
 // failed holds one line per call that did not succeed.
 type sessionIdentitySyncMsg struct {
 	host   string
 	failed []string
 }
 
-// syncIdentityToServe sends group and name changes to the serve on host.
+// syncIdentityToServe sends group, name and pin changes to the serve on host.
 // Serve's row is what the event stream replays on the next start, so a change
 // made only in the laptop DB would be undone. Placeholder and empty ids, and
 // hosts with no configured remote, are skipped.

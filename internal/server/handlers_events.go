@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/bouwerp/aiman/internal/domain"
@@ -256,8 +257,8 @@ func collectSessionEvents(pty ptyLister, seen map[string]SessionEvent, states fu
 
 // collectRepoCreatedEvents announces each session the first time it appears in
 // serve's store so a CLI create reaches event-stream clients without a scan.
-// announced keeps an identity fingerprint per id, and a row whose role, parent
-// or name changed is announced again: a helper first stored without its role
+// announced keeps an identity fingerprint per id, and a row whose role, parent,
+// name, group or pin changed is announced again: a helper first stored without its role
 // must still reach the dashboard as hidden.
 func collectRepoCreatedEvents(sessions []domain.Session, announced map[string]string) []SessionEvent {
 	var out []SessionEvent
@@ -265,7 +266,7 @@ func collectRepoCreatedEvents(sessions []domain.Session, announced map[string]st
 		if s.ID == "" {
 			continue
 		}
-		fp := string(s.Role) + "\x00" + s.ParentID + "\x00" + s.Name
+		fp := string(s.Role) + "\x00" + s.ParentID + "\x00" + s.Name + "\x00" + s.Group + "\x00" + strconv.FormatBool(s.Pinned)
 		if prev, ok := announced[s.ID]; ok && prev == fp {
 			continue
 		}

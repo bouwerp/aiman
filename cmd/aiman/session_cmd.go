@@ -71,7 +71,7 @@ func writeCLIError(code, msg string) {
 
 func runSession(args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|forget|restart|terminate|prompt|wait|read|log|replay|report-agent-session|deepcode-watch> …\n")
+		fmt.Fprintf(os.Stderr, "Usage: aiman session <list|get|create|rename|move|pin|unpin|forget|restart|terminate|prompt|wait|read|log|replay|report-agent-session|deepcode-watch> …\n")
 		fmt.Fprintf(os.Stderr, "Are you an AI? Run: aiman --skill\n")
 		return errUsage
 	}
@@ -188,6 +188,12 @@ func runSession(args []string) error {
 			return errUsage
 		}
 		return callAndPrint(sock, "session.rename", map[string]any{"id": args[1], "name": args[2]})
+	case "pin", "unpin":
+		if len(args) < 2 {
+			writeCLIError(server.CodeInvalidParams, "session "+args[0]+" <target>")
+			return errUsage
+		}
+		return callAndPrint(sock, "session.pin", map[string]any{"id": args[1], "pinned": args[0] == "pin"})
 	case "forget":
 		if len(args) < 2 {
 			writeCLIError(server.CodeInvalidParams, "session forget requires a target")

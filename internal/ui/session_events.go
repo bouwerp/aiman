@@ -191,6 +191,10 @@ func (m *Model) applySessionEvent(msg sessionEventMsg) tea.Cmd {
 	}
 	if msg.event.Type == "session_created" && msg.event.Session != nil {
 		m.upsertLiveSession(sessionFromInfo(msg.host, *msg.event.Session))
+		// An older serve stores no pin and sends none; the laptop's stays.
+		if p := msg.event.Session.Pinned; p != nil {
+			m.applyServePin(msg.event.Session.ID, *p)
+		}
 		return follow(nil)
 	}
 	// serve sends session_gone once a holder leaves its pty list. A helper or
