@@ -88,6 +88,24 @@ Rename (does not rename the terminal or worktree):
 aiman session rename q1 spike
 ```
 
+## Multi-repo sessions
+
+One session can hold 2 to 8 repositories. Repeat `--repo`; `slug:base` sets a base:
+
+```bash
+aiman session create --repo owner/api --repo owner/web:develop --name host-tab
+```
+
+The agent starts in the workspace directory `<root>/<branch>@ws/`. It is not a git repository. Each subdirectory is one member worktree on the same branch. The task file lists the members under `## Repositories`. In such a session:
+
+1. Read each member's CLAUDE.md or AGENTS.md before you edit it.
+2. Commit in each member.
+3. Push with `git -C <member dir> push`. The CI gate refuses a bare `git push`.
+4. Open a PR with `gh -R <slug> pr create`, one PR for each member.
+5. Run local CI with `aiman ci local --repo <slug> --wait`.
+
+`aiman land`, `session create --for`, the harness and verify refuse a multi-repo session (`invalid_params`). The PR gate does not ask for verify in such a session.
+
 ## Prompt and wait
 
 ```bash
