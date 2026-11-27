@@ -216,6 +216,16 @@ func TestFeedHeaderCountsOpenAndHigh(t *testing.T) {
 	}
 }
 
+// With the feed on and nothing open the header still shows the feed.
+func TestFeedHeaderShowsZeroWhileOn(t *testing.T) {
+	f := sampleFeed()
+	f.actions = nil
+	m := feedModel(t, f)
+	if v := feedView(m); !strings.Contains(v, "feed 0") {
+		t.Fatalf("header lacks %q:\n%s", "feed 0", v)
+	}
+}
+
 func TestFeedPanelShowsTopThreeRows(t *testing.T) {
 	m := feedModel(t, sampleFeed())
 	v := feedView(m)
@@ -251,7 +261,7 @@ func TestFeedPanelFocusShowsTheAction(t *testing.T) {
 		t.Fatal("rationale shown before the panel has focus")
 	}
 	reads := f.count("feed.actions")
-	m = feedKey(t, m, "ctrl+f")
+	m = feedKey(t, m, "ctrl+e")
 	v := feedView(m)
 	for _, want := range []string{"wtb-2628 owns that change", "Not yet", "Which change"} {
 		if !strings.Contains(v, want) {
@@ -272,7 +282,7 @@ func TestFeedPanelFocusShowsTheAction(t *testing.T) {
 func TestFeedPanelNumberApprovesThatOption(t *testing.T) {
 	f := sampleFeed()
 	m := feedModel(t, f)
-	m = feedKey(t, m, "ctrl+f")
+	m = feedKey(t, m, "ctrl+e")
 	feedKey(t, m, "2")
 	p := f.lastAct(t)
 	if p["id"] != float64(12) || p["op"] != "approve" || p["option"] != float64(1) {
@@ -286,7 +296,7 @@ func TestFeedPanelNumberApprovesThatOption(t *testing.T) {
 func TestFeedPanelDismissNotRelevant(t *testing.T) {
 	f := sampleFeed()
 	m := feedModel(t, f)
-	m = feedKey(t, m, "ctrl+f")
+	m = feedKey(t, m, "ctrl+e")
 	feedKey(t, m, "d")
 	p := f.lastAct(t)
 	if p["id"] != float64(12) || p["op"] != "dismiss" || p["reason"] != string(domain.FeedNotRelevant) {
@@ -299,7 +309,7 @@ func TestFeedPanelDismissMenu(t *testing.T) {
 
 	f := sampleFeed()
 	m := feedModel(t, f)
-	m = feedKey(t, m, "ctrl+f")
+	m = feedKey(t, m, "ctrl+e")
 	m = feedKey(t, m, "D")
 	v := feedView(m)
 	for _, want := range reasons {
@@ -320,7 +330,7 @@ func TestFeedPanelDismissMenu(t *testing.T) {
 		Title: "#payments digest", Body: "Ana: does the settler config change break the bot?", ThreadKey: "slack:C1/790",
 		Class: "ambient", Channel: "C1", At: time.Now()}
 	m = feedModel(t, d)
-	m = feedKey(t, m, "ctrl+f")
+	m = feedKey(t, m, "ctrl+e")
 	m = feedKey(t, m, "D")
 	if v := feedView(m); !strings.Contains(v, "mute channel") {
 		t.Errorf("menu lacks mute channel for a digest action:\n%s", v)
@@ -329,7 +339,7 @@ func TestFeedPanelDismissMenu(t *testing.T) {
 
 func TestFeedPanelTraceToggle(t *testing.T) {
 	m := feedModel(t, sampleFeed())
-	m = feedKey(t, m, "ctrl+f")
+	m = feedKey(t, m, "ctrl+e")
 	before := feedView(m)
 	m = feedKey(t, m, "t")
 	shown := feedView(m)

@@ -342,7 +342,7 @@ Every surface reads the same RPCs: `feed.status` (counts, last batch, errors), `
 
 - The header gains `feed 4` (open actions; red when any is high priority), next to the needs-you count.
 - Under the session list, a feed panel shows the open actions, highest priority first: one line each with priority, source, kind and a short text. It shows 3 rows when collapsed. With no open actions it is one dim line: `feed: nothing to do · last batch 10:04`.
-- `ctrl+f` focuses the panel, as `ctrl+t` focuses the to-do list: `j`/`k` move, `1`-`4` pick that option and approve it, `enter` approve the first, `e` edit the selected option's text, `t` show the trace, `d` dismiss as not relevant, `D` dismiss with a reason (a small menu of the five reasons), `o` open the event's link, `v` expand, `esc` back. The selected action's rationale, options and trace timeline replace the detail pane while the panel has focus.
+- `ctrl+e` focuses the panel, as `ctrl+t` focuses the to-do list: `j`/`k` move, `1`-`4` pick that option and approve it, `enter` approve the first, `e` edit the selected option's text, `t` show the trace, `d` dismiss as not relevant, `D` dismiss with a reason (a small menu of the five reasons), `o` open the event's link, `v` expand, `esc` back. The selected action's rationale, options and trace timeline replace the detail pane while the panel has focus.
 - The TUI reads `feed.actions` per host on start, on each `feed` hub event (a background budget slot, as `overview` does) and when the panel gets focus. It has no poll of its own.
 
 **TUI Feed page** (`F` on the sessions tab): the full list with the digest (`tab`), the batch history and the memory (`m`), where the operator can delete a bullet.
@@ -370,14 +370,14 @@ aiman · regent0                              9 sessions · 2 needs you · feed 
  ○ —         event-feed-with-actions                          ━───────── 0/9
    └ ○ —     feed-store                                       
  ✓ WTB-2629  signer-record                                    done
-─ feed ─────────────────────────────────────────────────── ctrl+f · F full page ─
+─ feed ─────────────────────────────────────────────────── ctrl+e · F full page ─
  ! slack   #payments · Ana: does the settler config change break the bot?   3 answers
  · github  realfi-co/realfi#3441 asks for your review (touches evm-settler)  2 answers
  · aiman   vault-fix waits for your answer on the pause test                read
  +1 more · last batch 10:04 · 3 events in digest
 ```
 
-**M2. TUI home page, feed panel focused (`ctrl+f`).** The detail pane on the right shows the selected action: rationale, options and trace. `1`-`4` approves that option, `e` edits the selected option, `t` expands the trace, `d` dismisses, `o` opens the source link.
+**M2. TUI home page, feed panel focused (`ctrl+e`).** The detail pane on the right shows the selected action: rationale, options and trace. `1`-`4` approves that option, `e` edits the selected option, `t` expands the trace, `d` dismisses, `o` opens the source link.
 
 ```text
 aiman · regent0                              9 sessions · 2 needs you · feed 4 (1 high)

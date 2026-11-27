@@ -919,7 +919,7 @@ func NewModel(cfg *config.Config, doctorResults []usecase.CheckResult, initialSe
 			key.NewBinding(key.WithKeys("`"), key.WithHelp("`", "toggle debug console")),
 			key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "usage and cost")),
 			key.NewBinding(key.WithKeys("O"), key.WithHelp("O", "overview of the host's sessions")),
-			key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "feed actions")),
+			key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "feed actions")),
 			key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "feed page")),
 			key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update aiman (when a release is shown)")),
 		}
@@ -4855,7 +4855,7 @@ func (m *Model) handleMainKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case "ctrl+t":
 			m.enterTodoFocus()
 			return m, nil, true
-		case "ctrl+f":
+		case "ctrl+e":
 			return m, m.enterFeedFocus(), true
 		case "?":
 			m.showKeys = !m.showKeys
